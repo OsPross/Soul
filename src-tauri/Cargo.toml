@@ -72,7 +72,9 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "4", default-features = false, features = ["blocking"] }
+# MPRIS (island/media.rs). async-io = zbus's own executor behind the blocking API; without a runtime
+# feature zbus does not compile (it only built before because another crate enabled one).
+zbus = { version = "4", default-features = false, features = ["async-io"] }
 # XRecord: passive global key/button snooping for the Smart talk key on X11 (pure Rust).
 x11rb = { version = "0.13", features = ["record", "randr"] }
 # nice() for the low-priority wake word thread (already in the tree via cpal/alsa).
