@@ -443,12 +443,12 @@ pub fn extract_fact(text: &str) -> Option<(String, &'static str)> {
             }
             ("my", "name", "is") => Some((tail(i), "osobiste")),
             ("i", "play", "on") => Some((tail(i), "gry")),
-            (m, _, _) if matches!(m, "moja" | "moj" | "moje" | "my") => {
+            ("moja" | "moj" | "moje" | "my", _, _) => {
                 // "moja (ulubiona) playlista to …", "mój serwer to …", "my playlist is …"
                 let rest = &folded[i..];
                 rest.iter()
                     .position(|x| x == "to" || x == "is" || x == "nazywa")
-                    .filter(|&p| p >= 2 && p <= 4 && p + 1 < rest.len())
+                    .filter(|&p| (2..=4).contains(&p) && p + 1 < rest.len())
                     .map(|_| {
                         let fact = tail(i);
                         let cat = guess_category(&fact);

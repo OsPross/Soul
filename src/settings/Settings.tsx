@@ -18,6 +18,8 @@ import {
 } from "./model";
 import { AdvancedPage, GeneralPage, HotkeysPage, IslandPage, MicPage, ModelsPage, VoicePage } from "./pages";
 import AppearancePage from "./AppearancePage";
+import AboutPage from "./AboutPage";
+import { getVersion } from "@tauri-apps/api/app";
 import { MemoryPage, ScenesPage } from "./MemoryScenes";
 import { Button } from "./ui";
 
@@ -31,7 +33,8 @@ export type PageId =
   | "scenes"
   | "island"
   | "appearance"
-  | "advanced";
+  | "advanced"
+  | "about";
 
 /** Everything a page needs; built once per render in `Settings`. */
 export interface SettingsCtx {
@@ -68,6 +71,7 @@ const NAV: { id: PageId; pl: string; en: string; icon: string }[] = [
   { id: "island", pl: "Wyspa", en: "Island", icon: "M6 6h12a3 3 0 0 1 0 6H6a3 3 0 0 1 0-6zM8 16h8" },
   { id: "appearance", pl: "Wygląd", en: "Appearance", icon: "M12 3a9 9 0 1 0 0 18c1 0 1.5-.8 1.5-1.6 0-1.3-1-1.4-1-2.6 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.5 17 3 12 3zM7.5 12a1 1 0 1 0 0-.1M10 8a1 1 0 1 0 0-.1M15 8a1 1 0 1 0 0-.1" },
   { id: "advanced", pl: "Zaawansowane", en: "Advanced", icon: "M4 6h10M18 6h2M4 12h4m4 0h8M4 18h12m4 0h0M14 4v4M8 10v4M16 16v4" },
+  { id: "about", pl: "O aplikacji", en: "About", icon: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zm0-10v5m0-8h.01" },
 ];
 
 export default function Settings() {
@@ -89,6 +93,10 @@ export default function Settings() {
   const [loadingModels, setLoadingModels] = useState(false);
   const [loadingMics, setLoadingMics] = useState(false);
   const [errorLog, setErrorLog] = useState<string[]>([]);
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => undefined);
+  }, []);
 
   const patch = useCallback((p: Partial<SettingsData>) => setForm((prev) => ({ ...prev, ...p })), []);
 
@@ -393,7 +401,7 @@ export default function Settings() {
           })}
         </nav>
         <div className="mt-auto px-2 text-[10.5px] leading-relaxed text-white/30">
-          Soul 0.1 · {tr(lang, "Zmiany wyglądu zapisują się od razu", "Appearance changes save instantly")}
+          Soul {version ? `v${version}` : ""} · {tr(lang, "Zmiany wyglądu zapisują się od razu", "Appearance changes save instantly")}
         </div>
       </aside>
 
@@ -414,6 +422,7 @@ export default function Settings() {
                 {page === "island" && <IslandPage s={ctx} />}
                 {page === "appearance" && <AppearancePage s={ctx} />}
                 {page === "advanced" && <AdvancedPage s={ctx} />}
+                {page === "about" && <AboutPage lang={lang} />}
               </div>
             </motion.div>
           </AnimatePresence>

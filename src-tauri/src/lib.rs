@@ -11,6 +11,7 @@ mod platform;
 mod scenes;
 mod talk;
 mod timers;
+mod updater;
 mod voice;
 mod wake;
 #[cfg(test)]
@@ -257,6 +258,9 @@ fn save_app_settings(
     settings.wake_enabled = previous.wake_enabled;
     settings.wake_sensitivity = previous.wake_sensitivity;
     settings.wake_pause_in_games = previous.wake_pause_in_games;
+    // And the update section (autosaved via `update_save_config`).
+    settings.auto_update = previous.auto_update;
+    settings.update_channel = previous.update_channel.clone();
 
     // Validate hotkeys BEFORE persisting anything.
     for (label, hk) in [
@@ -576,9 +580,8 @@ fn stop_mic_monitor(state: tauri::State<'_, AppState>) {
 
 #[tauri::command]
 fn ask_start(app: AppHandle) -> Result<(), String> {
-    ask::start_ask(&app).map_err(|e| {
+    ask::start_ask(&app).inspect_err(|e| {
         push_error_log(&app, e.clone());
-        e
     })
 }
 
@@ -606,6 +609,8 @@ fn ask_followup(app: AppHandle, text: Option<String>, with_audio: bool) -> Resul
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState {
             recorder: Arc::new(AudioRecorder::new()),
             platform: create_platform(),
@@ -671,6 +676,12 @@ pub fn run() {
             wake::wake_train_reset,
             timers::timers_list,
             timers::timer_cancel,
+            updater::update_status,
+            updater::update_check,
+            updater::update_download,
+            updater::update_install,
+            updater::update_open_release,
+            updater::update_save_config,
             sfx_log,
             island::island_get_snapshot,
             island::island_set_expanded,
@@ -693,6 +704,7 @@ pub fn run() {
             }
             island::init(app.handle());
             timers::start_worker(app.handle().clone());
+            updater::init(app.handle());
             app.state::<AppState>().voice.attach(app.handle().clone());
             app.state::<AppState>()
                 .recorder

@@ -49,9 +49,7 @@ pub fn new_agent_state() -> AgentState {
 
 #[tauri::command]
 pub fn agent_confirm(app: AppHandle, accepted: bool) -> Result<(), String> {
-    let state = app.state::<AppState>();
-    let tx = state.agent.pending_confirm.lock().take();
-    drop(state);
+    let tx = app.state::<AppState>().agent.pending_confirm.lock().take();
     match tx {
         Some(tx) => {
             let _ = tx.send(accepted);

@@ -38,6 +38,9 @@ use std::io::Cursor;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Tool picked for a command (name + args), and which stage decided it.
+type CommandDecision = (Option<(String, Value)>, &'static str);
+
 const REPORT_FILE: &str = "report.md";
 const SCENES_FILE: &str = "scenes.json";
 /// 100 ms of 16 kHz s16le mono, as the PCM feeder sends it.
@@ -142,7 +145,7 @@ pub(crate) fn pcm16k_to_wav(pcm: &[u8]) -> Vec<u8> {
     let mut buf = Cursor::new(Vec::new());
     {
         let mut w = hound::WavWriter::new(&mut buf, spec).expect("wav writer");
-        for s in pcm.chunks_exact(2) {
+        for s in pcm.as_chunks::<2>().0 {
             w.write_sample(i16::from_le_bytes([s[0], s[1]])).expect("wav sample");
         }
         w.finalize().expect("wav finalize");
@@ -285,7 +288,7 @@ impl Pipeline {
     }
 
     /// `agent::text_command` decision: pre-router → Live tools → REST tools. Nothing executes.
-    fn command(&self, text: &str) -> Result<(Option<(String, Value)>, &'static str), String> {
+    fn command(&self, text: &str) -> Result<CommandDecision, String> {
         if text.trim().is_empty() {
             return Ok((None, "wake-word-only"));
         }
@@ -355,7 +358,7 @@ impl Pipeline {
         }
     }
 
-    fn rest_command(&self, text: &str) -> Result<(Option<(String, Value)>, &'static str), String> {
+    fn rest_command(&self, text: &str) -> Result<CommandDecision, String> {
         let initial = build_agent_body_from_text(text, &self.settings.language)?;
         let mut body = json!({
             "contents": initial["contents"],

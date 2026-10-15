@@ -107,7 +107,7 @@ impl VoicePlayer {
                                     Some((generation, Resampler::new(REPLY_SAMPLE_RATE, rate)));
                             }
                             let samples: Vec<f32> = pcm
-                                .chunks_exact(2)
+                                .as_chunks::<2>().0.iter()
                                 .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
                                 .collect();
                             let mut resampled = Vec::with_capacity(samples.len() * 2 + 4);

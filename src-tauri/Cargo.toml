@@ -74,6 +74,10 @@ x11rb = { version = "0.13", features = ["record"] }
 # nice() for the low-priority wake word thread (already in the tree via cpal/alsa).
 libc = "0.2"
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
+
 [profile.release]
 codegen-units = 1
 lto = true

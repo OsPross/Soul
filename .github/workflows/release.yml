@@ -1,0 +1,142 @@
+name: Release
+
+# `npm run release -- 0.2.0` → `git push origin main v0.2.0` → this workflow builds Windows + Linux
+# installers, signs the updater artifacts and creates a DRAFT GitHub Release with latest.json.
+# Publishing the draft (GitHub → Releases → Edit → Publish) ships the update to users.
+# Tags with a pre-release suffix (v0.3.0-beta.1) become prereleases → beta channel only.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  create-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Version from tag
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="$(node scripts/version.mjs)"
+          if [ "$VERSION" != "$PKG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG (use npm run release)"
+            exit 1
+          fi
+          node scripts/version.mjs check
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then echo "prerelease=true" >> "$GITHUB_OUTPUT"; else echo "prerelease=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Create draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          node scripts/changelog.mjs "${{ steps.meta.outputs.version }}" > notes.md
+          cat >> notes.md <<'EOF'
+
+          ---
+          **Windows:** `Soul_*_x64-setup.exe` (recommended, self-updating) or `.msi`. Unsigned build — SmartScreen may warn: *More info → Run anyway*.
+          **Linux:** `.AppImage` (self-updating), `.deb` (Ubuntu/Debian: `sudo apt install ./Soul_*.deb`) or `.rpm` (Fedora: `sudo dnf install ./Soul-*.rpm`).
+          EOF
+          ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)"
+          if [ -z "$ID" ]; then
+            FLAGS=(--draft --verify-tag --title "Soul $GITHUB_REF_NAME" --notes-file notes.md)
+            [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
+            gh release create "$GITHUB_REF_NAME" "${FLAGS[@]}"
+            ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)"
+          fi
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            # MSI needs a numeric-only pre-release, so betas ship the NSIS installer only.
+            bundles: ${{ needs.create-release.outputs.prerelease == 'true' && 'nsis' || 'nsis,msi' }}
+          - platform: ubuntu-22.04
+            bundles: deb,rpm,appimage
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: ./scripts/ci-linux-deps.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: release
+
+      - run: npm ci
+
+      - name: Build, sign and upload installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          # latest.json is assembled once by the next job (parallel jobs would race on it).
+          includeUpdaterJson: false
+          args: --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}
+
+  updater-manifest:
+    needs: [create-release, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Upload latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/latest-json.mjs "${{ needs.create-release.outputs.release_id }}" "$GITHUB_REF_NAME"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Soul $GITHUB_REF_NAME — draft release ready"
+            echo
+            echo "Review the assets and notes, then **publish** the draft to ship the update."
+            echo
+            echo '```json'
+            cat latest.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

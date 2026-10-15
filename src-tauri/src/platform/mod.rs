@@ -106,7 +106,7 @@ pub trait Platform: Send + Sync {
 pub fn create_platform() -> Arc<dyn Platform> {
     #[cfg(target_os = "windows")]
     {
-        return Arc::new(windows::WindowsPlatform::new());
+        Arc::new(windows::WindowsPlatform::new())
     }
 
     #[cfg(target_os = "linux")]

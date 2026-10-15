@@ -232,7 +232,7 @@ impl GeminiClient {
                 .map(|arr| arr.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
 
-            let supports_gen = methods.iter().any(|m| *m == "generateContent");
+            let supports_gen = methods.contains(&"generateContent");
             let supports_live = methods.iter().any(|m| {
                 *m == "bidiGenerateContent" || *m == "BidiGenerateContent"
             });
@@ -350,7 +350,7 @@ impl GeminiClient {
         let fallback = fallback_model
             .map(normalize_model_id)
             .filter(|m| !m.is_empty() && m != &self.model)
-            .unwrap_or_else(|| String::new());
+            .unwrap_or_default();
 
         let primary = if fallback.is_empty() {
             self.model.clone()
@@ -444,6 +444,7 @@ impl GeminiClient {
     /// Circle-to-Ask: cropped PNG + optional audio/text question, with conversation history.
     /// Keeps exponential backoff on 503/429/network. On 404, retires the model and falls back
     /// immediately (no backoff for that hop).
+    #[allow(clippy::too_many_arguments)]
     pub fn ask_screen_resilient<F, R>(
         &self,
         png_bytes: &[u8],
@@ -1587,7 +1588,7 @@ fn format_reqwest_error(
         parts.push("kind=decode".into());
     }
     if let Some(url) = err.url() {
-        parts.push(format!("url={}", redact_secrets(&url.to_string())));
+        parts.push(format!("url={}", redact_secrets(url.as_ref())));
     }
 
     let mut source = err.source();

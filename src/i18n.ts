@@ -64,6 +64,14 @@ const en = {
   "ask.you": "You",
   "ask.escHint": "Esc closes",
   "ask.voice": "Ask by voice",
+  // Updates
+  "update.newVersion": "New version v{v}",
+  "update.install": "Install",
+  "update.download": "Download",
+  "update.installing": "Installing…",
+  "update.restart": "Restart",
+  "update.hint": "Soul restarts with the new version",
+  "update.hintManual": "Get the new package from GitHub",
 } as const;
 
 type Key = keyof typeof en;
@@ -126,6 +134,13 @@ const pl: Partial<Record<Key, string>> = {
   "ask.you": "Ty",
   "ask.escHint": "Esc zamyka",
   "ask.voice": "Zapytaj głosem",
+  "update.newVersion": "Nowa wersja v{v}",
+  "update.install": "Zainstaluj",
+  "update.download": "Pobierz",
+  "update.installing": "Instaluję…",
+  "update.restart": "Uruchom ponownie",
+  "update.hint": "Soul uruchomi się ponownie w nowej wersji",
+  "update.hintManual": "Pobierz nowy pakiet z GitHub",
 };
 
 const maps: Record<UiLang, Partial<Record<Key, string>>> = { pl, en };

@@ -60,7 +60,7 @@ pub fn start_watcher(app: AppHandle) {
                     clipboard = Clipboard::new().ok();
                     if clipboard.is_none() {
                         fail_streak += 1;
-                        if fail_streak == 1 || fail_streak % 20 == 0 {
+                        if fail_streak == 1 || fail_streak.is_multiple_of(20) {
                             eprintln!(
                                 "[soul][island][clipboard] Clipboard::new failed (x{fail_streak})"
                             );

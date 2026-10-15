@@ -23,6 +23,7 @@ import {
 } from "./panels";
 import { playCue, type Cue } from "./sounds";
 import { tr } from "../i18n";
+import { hasPendingUpdate, installUpdate, useUpdate, type UpdateStatus } from "../lib/update";
 
 /** Transparent window margin around the panel; must match PAD_X / PAD_B in island/mod.rs. */
 const PAD_X = 20;
@@ -112,7 +113,7 @@ type Tab = "now" | "clipboard" | "plans" | "apps" | "settings";
  * `stage` = big live-activity card, `compact` = same info squeezed into the pill (quiet mode
  * or "don't expand" for that feature).
  */
-type Stage = "confirm" | "toast" | "stage" | "compact" | "caption" | "music" | "idle";
+type Stage = "confirm" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
 
 const SIZE = {
   idle: { w: 236, h: 40, r: 20 },
@@ -122,6 +123,7 @@ const SIZE = {
   stageLong: { w: 460, h: 118, r: 28 },
   confirm: { w: 400, h: 140, r: 28 },
   toast: { w: 440, h: 76, r: 26 },
+  update: { w: 420, h: 76, r: 26 },
   caption: { w: 440, h: 84, r: 28 },
   peekIdle: { w: 320, h: 72, r: 26 },
   peekMusic: { w: 430, h: 96, r: 26 },
@@ -142,6 +144,8 @@ const emptyNowPlaying = (): NowPlaying => ({
 });
 
 const IDLE_PAUSE_MS = 30_000;
+/** How long the collapsed "new version" notice stays (it stays in peek until installed). */
+const UPDATE_NOTICE_MS = 12_000;
 
 function spiritStateOf(b: Banner, music: boolean): SpiritState {
   switch (b.state) {
@@ -194,6 +198,9 @@ export default function Island() {
   const [wake, setWake] = useState<WakeMicState | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const shownAt = useRef(0);
+  const update = useUpdate();
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const announced = useRef<string | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.add("island-root");
@@ -387,12 +394,37 @@ export default function Island() {
             : "compact"
           : toast
             ? "toast"
-            : showCaption
+            : updateNotice
+              ? "update"
+              : showCaption
               ? "caption"
               : mediaActive
                 ? "music"
                 : "idle";
   const nextTimer = timers[0] ?? null;
+
+  // Announce a new version once per version, only while Soul is quiet: never over a recording,
+  // a spoken reply, a confirmation, a toast or a dictation caption (it waits for the next idle).
+  const pending = hasPendingUpdate(update);
+  const quietNow = !active && !toast && !showCaption && mode === "collapsed";
+  useEffect(() => {
+    if (!pending || !update?.version || announced.current === update.version || !quietNow || quiet) return;
+    announced.current = update.version;
+    setUpdateNotice(update.version);
+    cue("notify");
+  }, [pending, update?.version, quietNow, quiet, cue]);
+  useEffect(() => {
+    if (!updateNotice) return;
+    const id = window.setTimeout(() => setUpdateNotice(null), UPDATE_NOTICE_MS);
+    return () => window.clearTimeout(id);
+  }, [updateNotice]);
+  useEffect(() => {
+    if (!pending) setUpdateNotice(null);
+  }, [pending]);
+  const onInstallUpdate = useCallback(() => {
+    setUpdateNotice(null);
+    installUpdate(update).catch(() => undefined);
+  }, [update]);
 
   const onToastAction = useCallback((t: Toast) => {
     const a = t.action;
@@ -409,7 +441,8 @@ export default function Island() {
   const sState = spiritStateOf(shown, mediaActive && np.playing);
 
   // Pause decorative loops when collapsed and idle for a while.
-  const busy = mode !== "collapsed" || active || showCaption || np.playing || timers.length > 0 || Boolean(toast);
+  const busy =
+    mode !== "collapsed" || active || showCaption || np.playing || timers.length > 0 || Boolean(toast) || Boolean(updateNotice);
   useEffect(() => {
     if (!cfg.perf.pauseWhenIdle || busy) {
       setPaused(false);
@@ -582,6 +615,8 @@ export default function Island() {
                   status={active ? `${statusLabel}${shown.message ? ` — ${shown.message}` : ""}` : null}
                   clock={clock}
                   onOpen={toggle}
+                  update={pending ? update : null}
+                  onInstallUpdate={onInstallUpdate}
                 />
               ) : (
                 <Collapsed
@@ -604,6 +639,9 @@ export default function Island() {
                   timer={nextTimer}
                   nowMs={nowMs}
                   wake={wake}
+                  update={update}
+                  onInstallUpdate={onInstallUpdate}
+                  onUpdateClose={() => setUpdateNotice(null)}
                 />
               )}
             </motion.div>
@@ -731,8 +769,14 @@ function Collapsed({
   timer,
   nowMs,
   wake,
+  update,
+  onInstallUpdate,
+  onUpdateClose,
 }: {
   wake: WakeMicState | null;
+  update: UpdateStatus | null;
+  onInstallUpdate: () => void;
+  onUpdateClose: () => void;
   toast: Toast | null;
   onToastAction: (t: Toast) => void;
   onToastClose: () => void;
@@ -804,6 +848,24 @@ function Collapsed({
           </Press>
         )}
         <Press onClick={onToastClose} className="soul-btn-ghost shrink-0 rounded-full px-2 py-1 text-[11px]" aria-label="Zamknij">
+          ✕
+        </Press>
+      </div>
+    );
+  }
+
+  if (stage === "update" && update?.version) {
+    return (
+      <div className="flex h-full items-center gap-3 px-4" onClick={(e) => e.stopPropagation()}>
+        <SpiritSlot layoutId={spiritLayout}>{spirit(28)}</SpiritSlot>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold tracking-tight">{t("update.newVersion", { v: update.version })}</div>
+          <div className="truncate text-[11.5px] text-white/60">
+            {update.install === "manual" ? t("update.hintManual") : t("update.hint")}
+          </div>
+        </div>
+        <UpdateButton update={update} onClick={onInstallUpdate} accent={accent} />
+        <Press onClick={onUpdateClose} className="soul-btn-ghost shrink-0 rounded-full px-2 py-1 text-[11px]" aria-label="Zamknij">
           ✕
         </Press>
       </div>
@@ -922,6 +984,8 @@ function Peek({
   status,
   clock,
   onOpen,
+  update,
+  onInstallUpdate,
 }: {
   spirit: React.ReactNode;
   spiritLayout?: string;
@@ -931,16 +995,21 @@ function Peek({
   status: string | null;
   clock: string;
   onOpen: () => void;
+  update: UpdateStatus | null;
+  onInstallUpdate: () => void;
 }) {
   const t = useT();
+  const anim = useAnim();
+  const updateLine = update?.version ? t("update.newVersion", { v: update.version }) : null;
   if (!media) {
     return (
       <div className="flex h-full cursor-default items-center gap-3 px-3.5" onClick={onOpen}>
         <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-semibold tabular-nums">{clock}</div>
-          <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? t("island.idleHint")}</div>
+          <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? updateLine ?? t("island.idleHint")}</div>
         </div>
+        {update && !status && <UpdateButton update={update} onClick={onInstallUpdate} accent={anim.cfg.accent} />}
       </div>
     );
   }
@@ -950,10 +1019,34 @@ function Peek({
       <Artwork src={np.artworkDataUrl} size={46} radius={11} />
       <div className="min-w-0 flex-1">
         <Marquee text={np.title} className="text-[13px] font-semibold" />
-        <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? np.artist}</div>
+        <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? updateLine ?? np.artist}</div>
       </div>
+      {update && !status && <UpdateButton update={update} onClick={onInstallUpdate} accent={anim.cfg.accent} />}
       <Transport playing={np.playing} onMedia={onMedia} size={30} />
     </div>
+  );
+}
+
+/** "Zainstaluj" / "Pobierz" (package-manager install) / "Instaluję…" pill. */
+function UpdateButton({ update, onClick, accent }: { update: UpdateStatus; onClick: () => void; accent: string }) {
+  const t = useT();
+  const busy = update.phase === "waiting" || update.phase === "installing" || update.phase === "downloading";
+  const label = busy
+    ? t("update.installing")
+    : update.install === "manual"
+      ? t("update.download")
+      : update.phase === "installed"
+        ? t("update.restart")
+        : t("update.install");
+  return (
+    <Press
+      onClick={onClick}
+      disabled={busy}
+      className="shrink-0 rounded-full px-3 py-1.5 text-[11.5px] font-semibold text-[#0b0d0c] disabled:opacity-60"
+      style={{ background: accent }}
+    >
+      {label}
+    </Press>
   );
 }
 
