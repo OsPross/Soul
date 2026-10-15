@@ -197,12 +197,11 @@ sudo apt install -y \
   pkg-config
 ```
 
-Building the screen-capture crate also needs `libpipewire-0.3-dev libspa-0.2-dev libgbm-dev clang` (full CI list:
-`scripts/ci-linux-deps.sh`). On Fedora:
+Full list used by CI (Ubuntu 22.04): `scripts/ci-linux-deps.sh`. On Fedora:
 
 ```bash
 sudo dnf install -y webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel \
-  librsvg2-devel alsa-lib-devel libxdo-devel pipewire-devel mesa-libgbm-devel clang rpm-build
+  librsvg2-devel alsa-lib-devel libxdo-devel rpm-build
 sudo dnf group install -y c-development
 ```
 

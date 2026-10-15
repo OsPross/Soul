@@ -10,6 +10,8 @@ mod linux_wayland;
 #[cfg(target_os = "linux")]
 mod linux_x11;
 #[cfg(target_os = "linux")]
+pub mod x11_capture;
+#[cfg(target_os = "linux")]
 mod x11_hook;
 #[cfg(target_os = "windows")]
 mod windows;

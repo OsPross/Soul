@@ -29,7 +29,8 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `config.rs` – `Settings` struct, defaults, load/save (store file `soul-settings.json`), legacy migration,
   AltGr hotkey migration, `redact_settings` (use this for anything that leaves the backend).
 - `audio.rs` – mic capture (cpal) → 16 kHz mono WAV, mic monitor/level.
-- `capture.rs` – screen capture (xcap) for Circle-to-Ask. `ask.rs` – Ask flow/state machine.
+- `capture.rs` – screen capture for Circle-to-Ask: xcap on Windows; on Linux X11 `platform/x11_capture.rs` (x11rb RandR +
+  `GetImage`) — xcap always links PipeWire/libspa 0.10, which doesn't build against Ubuntu 22.04's PipeWire. `ask.rs` – Ask flow/state machine.
 - `ai/gemini.rs` – REST client: dictation, Ask, model listing, key test, system prompts, `normalize_model_id`.
 - `ai/live.rs` – Gemini Live API (WebSocket `BidiGenerateContent`) for dictation and commands: one async actor per
   feature on Tauri's tokio runtime (tokio-tungstenite + rustls), warm session, keepalive, reconnect/backoff, goAway,

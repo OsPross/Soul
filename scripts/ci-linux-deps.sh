@@ -9,6 +9,5 @@ sudo apt-get install -y --no-install-recommends \
   libasound2-dev libxdo-dev libssl-dev \
   libx11-dev libxext-dev libxtst-dev libxrandr-dev libxi-dev libxfixes-dev \
   libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev libxcb-record0-dev libxkbcommon-dev \
-  libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev libgbm-dev libegl-dev libwayland-dev \
-  clang libclang-dev \
+  libdbus-1-dev \
   rpm
