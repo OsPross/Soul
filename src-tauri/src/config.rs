@@ -33,6 +33,7 @@ pub const DEFAULT_VOICE_SPEED: &str = "normal";
 pub const DEFAULT_PERSONALITY: &str = "neutral";
 /// Soul's own voice level (TTS output gain), 0–100.
 pub const DEFAULT_VOICE_VOLUME: u8 = 100;
+pub const DEFAULT_WAKE_SENSITIVITY: f32 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +168,16 @@ pub struct Settings {
     /// Save durable facts stated in commands ("gram na serwerze X") with an Island chip.
     #[serde(default = "default_true")]
     pub auto_remember: bool,
+    /// Offline wake word ("Soul", rustpotter): listen locally, open a turn on detection.
+    /// Owned by `wake::save_config` (autosaved), never overwritten by `save_app_settings`.
+    #[serde(default)]
+    pub wake_enabled: bool,
+    /// 0.0 (strict, fewer false triggers) – 1.0 (sensitive).
+    #[serde(default = "default_wake_sensitivity")]
+    pub wake_sensitivity: f32,
+    /// No wake word while a fullscreen app / game is focused.
+    #[serde(default = "default_true")]
+    pub wake_pause_in_games: bool,
     /// Visual / animation preferences (accent, spirit, Island, animation config). Owned by the
     /// frontend (`src/anim/config.ts`); Rust only stores it and broadcasts `soul://appearance`.
     #[serde(default)]
@@ -207,6 +218,9 @@ fn default_personality() -> String {
 fn default_voice_volume() -> u8 {
     DEFAULT_VOICE_VOLUME
 }
+fn default_wake_sensitivity() -> f32 {
+    DEFAULT_WAKE_SENSITIVITY
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -243,6 +257,9 @@ impl Default for Settings {
             duck_music: false,
             search_open_browser: true,
             auto_remember: true,
+            wake_enabled: false,
+            wake_sensitivity: DEFAULT_WAKE_SENSITIVITY,
+            wake_pause_in_games: true,
             appearance: serde_json::Value::Null,
         }
     }
@@ -403,6 +420,13 @@ pub fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings, String>
     settings.duck_music = bool_or("duckMusic", false);
     settings.search_open_browser = bool_or("searchOpenBrowser", true);
     settings.auto_remember = bool_or("autoRemember", true);
+    settings.wake_enabled = bool_or("wakeEnabled", false);
+    settings.wake_sensitivity = store
+        .get("wakeSensitivity")
+        .and_then(|v| v.as_f64())
+        .map(|v| (v as f32).clamp(0.0, 1.0))
+        .unwrap_or(DEFAULT_WAKE_SENSITIVITY);
+    settings.wake_pause_in_games = bool_or("wakePauseInGames", true);
     if let Some(v) = store.get("appearance") {
         if v.is_object() {
             settings.appearance = v;
@@ -579,6 +603,12 @@ pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Res
     store.set("duckMusic", serde_json::Value::Bool(settings.duck_music));
     store.set("searchOpenBrowser", serde_json::Value::Bool(settings.search_open_browser));
     store.set("autoRemember", serde_json::Value::Bool(settings.auto_remember));
+    store.set("wakeEnabled", serde_json::Value::Bool(settings.wake_enabled));
+    store.set(
+        "wakeSensitivity",
+        serde_json::Value::from(settings.wake_sensitivity.clamp(0.0, 1.0) as f64),
+    );
+    store.set("wakePauseInGames", serde_json::Value::Bool(settings.wake_pause_in_games));
     if settings.appearance.is_object() {
         store.set("appearance", settings.appearance.clone());
     }
@@ -626,6 +656,9 @@ pub fn redact_settings(settings: &Settings) -> serde_json::Value {
         "duckMusic": settings.duck_music,
         "searchOpenBrowser": settings.search_open_browser,
         "autoRemember": settings.auto_remember,
+        "wakeEnabled": settings.wake_enabled,
+        "wakeSensitivity": settings.wake_sensitivity,
+        "wakePauseInGames": settings.wake_pause_in_games,
         "appearanceSet": settings.appearance.is_object(),
     })
 }

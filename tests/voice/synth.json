@@ -2,55 +2,522 @@
   {
     "id": "nastepna",
     "text": "Następna piosenka.",
-    "expect": { "route": "command", "tool": "media_control", "args": { "action": "next" } }
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "next"
+      }
+    }
   },
   {
     "id": "pauza",
     "text": "Pauza.",
-    "expect": { "route": "command", "tool": "media_control", "args": { "action": "pause" } }
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    }
   },
   {
     "id": "scisz30",
     "text": "Ścisz do trzydziestu procent.",
-    "expect": { "route": "command", "tool": "set_volume", "args": { "percent": 30 } }
+    "expect": {
+      "route": "command",
+      "tool": "set_volume",
+      "args": {
+        "percent": 30
+      }
+    }
   },
   {
     "id": "otworz_spotify",
     "text": "Otwórz Spotify.",
-    "expect": { "route": "command", "tool": "open_app", "args": { "name": "spotify" } }
+    "expect": {
+      "route": "command",
+      "tool": "open_app",
+      "args": {
+        "name": "spotify"
+      }
+    }
   },
   {
     "id": "wez_znajdz_sernik",
     "text": "Weź mi znajdź przepis na sernik.",
-    "expect": { "route": "command", "tool": "web_search", "args": { "query": "sernik" } }
+    "expect": {
+      "route": "command",
+      "tool": "web_search",
+      "args": {
+        "query": "sernik"
+      }
+    }
   },
   {
     "id": "minutnik_makaron",
     "text": "Nastaw dziesięć minut na makaron.",
-    "expect": { "route": "command", "tool": "set_timer", "args": { "seconds": 600 } }
+    "expect": {
+      "route": "command",
+      "tool": "set_timer",
+      "args": {
+        "seconds": 600
+      }
+    }
   },
   {
     "id": "wake_pogoda",
     "text": "Soul, jaka jest jutro pogoda w Krakowie?",
-    "expect": { "route": "command" },
-    "speeds": ["normal"]
+    "expect": {
+      "route": "command"
+    },
+    "speeds": [
+      "normal"
+    ]
   },
   {
     "id": "dyktowanie_faktura",
     "text": "Dzień dobry, w załączniku przesyłam fakturę za październik. Proszę o potwierdzenie odbioru.",
-    "expect": { "route": "dictation", "text_contains": ["faktur", "październik"] }
+    "expect": {
+      "route": "dictation",
+      "text_contains": [
+        "faktur",
+        "październik"
+      ]
+    }
   },
   {
     "id": "dyktowanie_korekta",
     "text": "Spotkanie przenosimy na czwartek, nie, na piątek o dziesiątej.",
-    "expect": { "route": "dictation", "text_contains": "piątek" },
-    "speeds": ["normal", "slow"]
+    "expect": {
+      "route": "dictation",
+      "text_contains": "piątek"
+    },
+    "speeds": [
+      "normal",
+      "slow"
+    ]
   },
   {
     "id": "dyktowanie_otworz",
     "text": "Pokaż mi proszę jutro rano wszystkie dokumenty, o których rozmawialiśmy na ostatnim spotkaniu zespołu.",
-    "expect": { "route": "dictation", "text_contains": "dokumenty" },
-    "voices": ["Charon"],
-    "speeds": ["normal"]
+    "expect": {
+      "route": "dictation",
+      "text_contains": "dokumenty"
+    },
+    "voices": [
+      "Charon"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "zapauzuj",
+    "text": "Zapauzuj muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal",
+      "fast"
+    ]
+  },
+  {
+    "id": "spauzuj",
+    "text": "Spauzuj.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wstrzymaj",
+    "text": "Wstrzymaj muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "zatrzymaj_muzyke",
+    "text": "Zatrzymaj muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "odtworz_muzyke",
+    "text": "Odtwórz muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "odtwarzaj",
+    "text": "Odtwarzaj muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "pusc_dalej",
+    "text": "Puść dalej.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "graj_dalej",
+    "text": "Graj dalej.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wznow",
+    "text": "Wznów.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wlacz_muzyke",
+    "text": "Włącz muzykę.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "co_teraz_leci",
+    "text": "Co teraz mi leci?",
+    "expect": {
+      "route": "command",
+      "tool": "now_playing"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal",
+      "fast"
+    ]
+  },
+  {
+    "id": "jaka_piosenka",
+    "text": "Jaka to piosenka?",
+    "expect": {
+      "route": "command",
+      "tool": "now_playing"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "co_za_utwor",
+    "text": "Co to za utwór?",
+    "expect": {
+      "route": "command",
+      "tool": "now_playing"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "scena_fajwa",
+    "text": "Gramy w fajwa.",
+    "expect": {
+      "route": "command",
+      "tool": "run_scene",
+      "args": {
+        "name": "granie"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal",
+      "fast"
+    ]
+  },
+  {
+    "id": "scena_odpalamy",
+    "text": "Odpalamy FiveM.",
+    "expect": {
+      "route": "command",
+      "tool": "run_scene",
+      "args": {
+        "name": "granie"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "pytanie_bilet",
+    "text": "Słuchaj, ile kosztuje bilet do Krakowa?",
+    "expect": {
+      "route": "command"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal",
+      "fast"
+    ]
+  },
+  {
+    "id": "pytanie_apteka",
+    "text": "Powiedz mi, gdzie jest najbliższa apteka?",
+    "expect": {
+      "route": "command"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "pytanie_wielkanoc",
+    "text": "A kiedy jest Wielkanoc?",
+    "expect": {
+      "route": "command"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wake_sol",
+    "text": "Sol, pauza.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wake_soula",
+    "text": "Soula, następna piosenka.",
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "next"
+      }
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "wake_hej",
+    "text": "Hej Soul, co gra?",
+    "expect": {
+      "route": "command",
+      "tool": "now_playing"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "dzien_dobry",
+    "text": "Dzień dobry.",
+    "expect": {
+      "route": "command",
+      "tool": "morning_briefing"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "dykt_zazolc",
+    "text": "Zażółć gęślą jaźń.",
+    "expect": {
+      "route": "dictation",
+      "text_equals": "Zażółć gęślą jaźń"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal",
+      "fast"
+    ]
+  },
+  {
+    "id": "pulapka_fivem",
+    "text": "Wczoraj graliśmy w FiveM z kolegami do późna.",
+    "expect": {
+      "route": "dictation",
+      "text_contains": "kolegami"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "pulapka_jak",
+    "text": "Jak już mówiłem, raport wyślę jutro rano.",
+    "expect": {
+      "route": "dictation",
+      "text_contains": "raport"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
+  },
+  {
+    "id": "pulapka_dzien_dobry",
+    "text": "Dzień dobry wszystkim, w załączniku przesyłam agendę spotkania.",
+    "expect": {
+      "route": "dictation",
+      "text_contains": "agend"
+    },
+    "voices": [
+      "Kore"
+    ],
+    "speeds": [
+      "normal"
+    ]
   }
 ]

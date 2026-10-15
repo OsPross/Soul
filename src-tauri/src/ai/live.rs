@@ -119,6 +119,13 @@ impl LiveSetup {
         }
     }
 
+    /// System instruction for the dictation (transcription) session, e.g. `POLISH_TRANSCRIPTION_HINT`.
+    pub fn with_instruction(mut self, text: &str) -> Self {
+        let text = text.trim();
+        self.system_instruction = (!text.is_empty()).then(|| text.to_string());
+        self
+    }
+
     /// Pin the spoken-reply language (`speechConfig.languageCode`).
     pub fn with_speech_language(mut self, code: &str) -> Self {
         let code = code.trim();
@@ -136,12 +143,16 @@ impl LiveSetup {
                 if !self.language_codes.is_empty() {
                     tx["languageCodes"] = json!(self.language_codes);
                 }
-                json!({
+                let mut s = json!({
                     "model": format!("models/{}", self.model),
                     "generationConfig": { "responseModalities": ["TEXT"] },
                     "realtimeInputConfig": realtime,
                     "inputAudioTranscription": tx,
-                })
+                });
+                if let Some(sys) = &self.system_instruction {
+                    s["systemInstruction"] = json!({ "parts": [{ "text": sys }] });
+                }
+                s
             }
             LiveKind::Commands => {
                 // Native-audio Live models answer in AUDIO (24 kHz PCM): spoken replies are
@@ -185,6 +196,11 @@ impl LiveSetup {
         json!({ "setup": setup })
     }
 }
+
+/// Transcription bias toward Polish orthography (evaluated with the voice regression harness:
+/// `SOUL_TEST_DICTATION_PROMPT=1`). Test-only until the A/B shows it helps.
+#[cfg(test)]
+pub const POLISH_TRANSCRIPTION_HINT: &str = "Transcribe the user's speech verbatim. The speaker is usually Polish: write Polish words with correct Polish spelling and all diacritics (ą ć ę ł ń ó ś ź ż), never replace them with similar-sounding words. Keep English words and names as spoken. Do not translate, answer or add anything.";
 
 /// BCP-47 hints for transcription. Polish is the default: `auto` biases to Polish + English
 /// (both still auto-detected), never forces a translation.

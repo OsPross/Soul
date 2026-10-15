@@ -12,10 +12,13 @@ mod scenes;
 mod talk;
 mod timers;
 mod voice;
+mod wake;
 #[cfg(test)]
 mod voice_regression;
 #[cfg(test)]
 mod voice_synth;
+#[cfg(test)]
+mod wake_regression;
 
 use ai::gemini::{
     is_retired_id, model_available, normalize_model_id, pick_default_fallback,
@@ -250,6 +253,10 @@ fn save_app_settings(
     }
     // Appearance is owned by `save_appearance` (saved live); a stale form copy must not win.
     settings.appearance = previous.appearance.clone();
+    // Same for the wake word section (autosaved via `wake_save_config`, also toggled from the tray).
+    settings.wake_enabled = previous.wake_enabled;
+    settings.wake_sensitivity = previous.wake_sensitivity;
+    settings.wake_pause_in_games = previous.wake_pause_in_games;
 
     // Validate hotkeys BEFORE persisting anything.
     for (label, hk) in [
@@ -309,6 +316,7 @@ fn save_app_settings(
         });
     }
     state.live.configure_from_settings(&settings);
+    wake::apply(&settings);
     eprintln!("[soul] settings saved: {}", redact_settings(&settings));
     Ok(())
 }
@@ -506,6 +514,17 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
     show_settings(&app)
 }
 
+/// Show Settings on the Voice page (wake word training lives there).
+pub(crate) fn open_settings_page(app: &AppHandle) -> Result<(), String> {
+    show_settings(app)?;
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window("settings"),
+        "settings://navigate",
+        "voice",
+    );
+    Ok(())
+}
+
 #[tauri::command]
 fn get_error_log(state: tauri::State<'_, AppState>) -> Vec<String> {
     state.error_log.lock().iter().cloned().collect()
@@ -644,6 +663,12 @@ pub fn run() {
             scene_delete,
             scene_run,
             scene_create_suggested,
+            wake::wake_status,
+            wake::wake_save_config,
+            wake::wake_test,
+            wake::wake_train_record,
+            wake::wake_train_build,
+            wake::wake_train_reset,
             timers::timers_list,
             timers::timer_cancel,
             sfx_log,
@@ -700,6 +725,8 @@ pub fn run() {
                 let _ = save_settings(app.handle(), &settings);
             }
             eprintln!("[soul] starting with {}", redact_settings(&settings));
+            // Offline wake word listener (idle until enabled and trained).
+            wake::init(app.handle(), &settings);
             app.state::<AppState>().voice.set_volume(settings.voice_volume);
 
             // Warm Live sessions in the background (non-blocking) so the first PTT is fast.
@@ -822,8 +849,10 @@ pub fn run() {
 
 fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let settings_i = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let wake_on = load_settings(app).map(|s| s.wake_enabled).unwrap_or(false);
+    let wake_i = wake::tray_item(app, wake_on)?;
     let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&settings_i, &quit_i])?;
+    let menu = Menu::with_items(app, &[&settings_i, &wake_i, &quit_i])?;
 
     let tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().cloned().expect("missing app icon"))
@@ -833,6 +862,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             "settings" => {
                 let _ = show_settings(app);
             }
+            "wake" => wake::toggle_from_tray(app),
             "quit" => {
                 app.exit(0);
             }
@@ -1205,7 +1235,8 @@ pub(crate) fn on_smart_released(app: &AppHandle) {
                 return;
             }
         };
-        match agent::classify_smart(&heard.text, &settings.wake_word) {
+        let text_field = || platform.text_input_focused();
+        match agent::classify_smart(&heard.text, &settings.wake_word, &text_field) {
             agent::Intent::Command { text, reason } => {
                 eprintln!(
                     "[soul][dictation] smart route=command reason={reason} ms={}",

@@ -40,7 +40,9 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `agent/mod.rs` – voice-command session + tool dispatch (`close_app` requires overlay Confirm/Cancel), spoken-reply
   draining + barge-in. `agent/router.rs` – deterministic Polish/English pre-router run before the LLM (returns `PreRoute` or `None`);
   strips filler openers („weź mi”, „czy możesz”, „ej”) first and keeps the user's original words in queries.
-  `agent/intent.rs` – Smart-mode classifier: wake word / command verb / short pre-router match → command, else dictation.
+  `agent/intent.rs` – Smart-mode classifier: fuzzy wake word / command verb / short pre-router match / lone greeting /
+  short „?” question (unless `Platform::text_input_focused`) → command, else dictation. Scene triggers match fuzzily
+  (`scenes::match_trigger`: phonetic tokens + similarity ≥ 0.8).
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
   a changed prompt reconnects it, so call `memory_changed` after edits). Refuses secrets; `extract_fact` = auto-remember.
@@ -50,6 +52,14 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `talk.rs` – Smart talk key worker: hook events → gated capture (Live turn opens after 200 ms hold), tap / chord /
   double-tap (command mode) / talk+drag (Circle-to-Ask). `voice.rs` – cpal playback of Live 24 kHz reply audio,
   generation counter for barge-in, `soul://voice-level` for the Island waveform.
+- `wake.rs` – offline wake word „Soul” (rustpotter MFCC+DTW, user-trained `wakeword/soul.rpw` in the app data dir).
+  `soul-wake` thread (below-normal priority) owns its own cpal stream → `Decimator` (16 kHz) → `WakeEngine`; the stream
+  is closed while paused (disabled/untrained, Soul speaking + 0.7 s tail, any recording, `busy`, Ask, fullscreen if
+  `wake_pause_in_games`, mic error). Detection → `talk::begin_capture` + energy `Endpointer` (1.2 s silence / 8 s cap,
+  4 s no speech = likely false positive) → `on_smart_released`. 2 s cooldown. Status `soul://wake` (Island mic glyph,
+  tray check item), Settings test meter `soul://wake-score`. `wake_*` settings are owned by `wake_save_config`
+  (autosave, tray) — `save_app_settings` keeps the stored values. Thresholds: `wake::thresholds(sensitivity)`, tuned
+  with `wake_regression.rs` (rustpotter's own defaults fire on most speech; its VAD is off — it blocks real detections).
 - `island/` – `mod.rs` (window, positioning, assistant banner + `kind`, tool/caption events), `media.rs` (Windows SMTC / Linux MPRIS via zbus),
   `clipboard.rs` (history; skips password-looking strings), `debug_log.rs` (`soul_debug!`), `watchdog.rs`.
 - `platform/` – OS abstraction (below).
@@ -78,7 +88,13 @@ cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust check
 ```
 Unit tests: `cargo test --manifest-path src-tauri/Cargo.toml --lib`. Live end-to-end (real API, Polish TTS):
 `SOUL_TEST_KEY=<key> cargo test --manifest-path src-tauri/Cargo.toml --lib live_smoke -- --ignored --nocapture`. Voice regression (real WAVs in `tests/voice/`, tools dry-run, writes `tests/voice/report.md`): `SOUL_TEST_KEY=<key> npm run test:voice`
-(`voice_regression.rs`; `voice_synth.rs` = TTS samples, `dev_samples.rs` = Settings recorder; `SOUL_DRY_RUN=1` = agent tools logged, not run). On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
+(`voice_regression.rs`; `voice_synth.rs` = TTS samples, `dev_samples.rs` = Settings recorder; `SOUL_DRY_RUN=1` = agent tools logged, not run).
+Wake word harness (offline, no key; `tests/voice/wake/`, writes `wake/report.md`): `npm run test:voice -- --wake` (`wake_regression.rs`;
+`wake_tune` = parameter sweep; `wake::cpu_live` = live CPU on the default mic). `scripts/test-voice.mjs` picks the test.
+`half` is pinned to 2.4.1 in `Cargo.toml`: rustpotter's candle-core 0.2 breaks with half ≥ 2.5 (rand_distr 0.5).
+Test binaries have no Tauri comctl32 manifest — code reachable from a test must not call into Tauri windowing/events
+(e.g. `audio::build_capture_stream` takes a `LevelEmitter` callback, not an `AppHandle`), or the test exe fails to load
+with `STATUS_ENTRYPOINT_NOT_FOUND`. On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
 `SOUL_DEBUG=1` enables verbose Island/media logs (`soul_debug!`).
 
 ## Models (Gemini)
@@ -159,7 +175,7 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
 
 - Rust logs use `eprintln!("[soul][module] message")`, where `module` is lowercase and matches the area:
   `agent`, `ask`, `audio`, `dictation`, `gemini`, `hook`, `island`, `live`, `memory`, `platform`, `quota`, `scene`, `sfx`, `timer`,
-  `voice`, `watchdog`, `error`.
+  `voice`, `wake`, `watchdog`, `error`.
   Reuse an existing tag; add a new one only for a new subsystem.
 - Verbose/noisy diagnostics go through `soul_debug!` (needs `SOUL_DEBUG=1`).
 - Wrap potentially slow commands in `watchdog::Watch::start("name")`; it warns when work exceeds 200 ms.

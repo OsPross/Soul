@@ -32,9 +32,12 @@ const FILLERS: &[(&[&str], bool)] = &[
     (&["wez"], false),
     (&["prosze", "cie"], false),
     (&["prosze"], false),
+    (&["powiedz", "mi"], false),
+    (&["sluchaj"], false),
     (&["no", "to"], false),
     (&["dobra"], false),
     (&["ej"], false),
+    (&["a"], false),
     (&["hej"], false),
     (&["soul"], false),
     (&["soulu"], false),
@@ -154,14 +157,7 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     if let Some(r) = match_scene(words, folded) {
         return Some(r);
     }
-    if contains_any(
-        lower,
-        &[
-            "co gra", "co leci", "co teraz gra", "co teraz leci", "jaka to piosenka",
-            "jaki to utwor", "co to za piosenka", "co to za utwor", "what's playing",
-            "whats playing", "what is playing", "what song is this",
-        ],
-    ) {
+    if is_now_playing(lower, folded) {
         return pr("now_playing", json!({}), "now-playing");
     }
     if is_morning_greeting(folded) || lower.contains("briefing") || lower.contains("poranny raport") {
@@ -200,6 +196,35 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     }
 
     None
+}
+
+/// Words that may sit inside a now-playing question: „co (teraz) (mi) leci”.
+const NOW_PLAYING_EXTRA: &[&str] = &["teraz", "mi", "tu", "tutaj", "aktualnie", "wlasnie", "sobie", "tam", "to"];
+
+/// „co gra?”, „co teraz mi leci?”, „jaka to piosenka?”, „co to za utwór?”, "what's playing".
+fn is_now_playing(lower: &str, folded: &[String]) -> bool {
+    if contains_any(
+        lower,
+        &[
+            "co gra", "co leci", "jaka to piosenka", "jaki to utwor", "jaki to kawalek",
+            "co to za piosenka", "co to za utwor", "co to za kawalek", "what's playing",
+            "whats playing", "what is playing", "what song is this",
+        ],
+    ) {
+        return true;
+    }
+    let core: Vec<&str> = folded
+        .iter()
+        .map(String::as_str)
+        .filter(|w| !NOW_PLAYING_EXTRA.contains(w))
+        .collect();
+    matches!(
+        core.as_slice(),
+        ["co", "leci" | "gra" | "slychac"]
+            | ["co", "za", "piosenka" | "utwor" | "kawalek" | "muzyka"]
+            | ["jaka", "piosenka" | "muzyka"]
+            | ["jaki", "utwor" | "kawalek"]
+    )
 }
 
 /// "dzień dobry" / "good morning" (+ at most two more words, e.g. "dzień dobry Soul").
@@ -686,8 +711,18 @@ fn cleanup_query(s: &str) -> String {
         .to_string()
 }
 
+/// Resume phrases checked before the "dalej" → next rule ("graj dalej" is play, not next).
+const RESUME_PHRASES: &[&str] = &[
+    "graj dalej", "pusc dalej", "odtwarzaj dalej", "wznow", "resume", "unpause",
+    "odtwarzaj muzyke", "odtworz muzyke", "pusc muzyke", "wlacz muzyke", "wlacz z powrotem muzyke",
+    "play music", "play track", "play song",
+];
+
 fn match_media(lower: &str) -> Option<&'static str> {
     // Prefer more specific phrases first.
+    if contains_any(lower, RESUME_PHRASES) && !contains_any(lower, &["wylacz", "zatrzymaj"]) {
+        return Some("play");
+    }
     // next
     if contains_any(
         lower,
@@ -726,8 +761,9 @@ fn match_media(lower: &str) -> Option<&'static str> {
         lower,
         &[
             "pauza",
+            "pauzuj", // zapauzuj, spauzuj
             "zatrzymaj",
-            "zatrzymaj muzyke",
+            "wstrzymaj",
             "stop",
             "pause",
             "wylacz muzyke",
@@ -736,21 +772,9 @@ fn match_media(lower: &str) -> Option<&'static str> {
         return Some("pause");
     }
     // play / resume — avoid matching when it's clearly "open/play an app"
-    if contains_any(
-        lower,
-        &[
-            "wznow",
-            "resume",
-            "unpause",
-            "graj dalej",
-            "play music",
-            "play track",
-            "play song",
-        ],
-    ) || lower == "graj"
-        || lower == "play"
+    let bare = lower.trim_end_matches(['.', '!', '?']);
+    if matches!(bare, "graj" | "play" | "odtworz" | "odtwarzaj" | "pusc")
         || lower.starts_with("graj ")
-        || lower == "odtworz"
     {
         // Don't steal "otworz …" / open-app style commands.
         if lower.contains("otworz") || lower.contains("open ") {
@@ -844,6 +868,35 @@ mod tests {
         let r = match_command("następna piosenka").unwrap();
         assert_eq!(r.tool, "media_control");
         assert_eq!(r.args["action"], "next");
+    }
+
+    #[test]
+    fn media_inflections() {
+        for (t, action) in [
+            ("Zapauzuj muzykę.", "pause"),
+            ("spauzuj", "pause"),
+            ("Wstrzymaj muzykę", "pause"),
+            ("Zatrzymaj muzykę", "pause"),
+            ("Odtwarzaj muzykę.", "play"),
+            ("odtwórz muzykę", "play"),
+            ("Puść muzykę", "play"),
+            ("Puść dalej", "play"),
+            ("Graj dalej.", "play"),
+            ("Włącz muzykę", "play"),
+            ("Wznów.", "play"),
+            ("Wyłącz muzykę", "pause"),
+            ("Dalej.", "next"),
+        ] {
+            let (tool, args) = tool(t).unwrap_or_else(|| panic!("{t}"));
+            assert_eq!((tool.as_str(), args["action"].as_str()), ("media_control", Some(action)), "{t}");
+        }
+    }
+
+    #[test]
+    fn now_playing_variants() {
+        for t in ["Co teraz mi leci?", "co mi teraz gra", "Co to za utwór?", "Jaka to piosenka?", "co tu leci"] {
+            assert_eq!(tool(t).map(|(n, _)| n), Some("now_playing".into()), "{t}");
+        }
     }
 
     #[test]

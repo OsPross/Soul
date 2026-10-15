@@ -46,6 +46,16 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// In-memory database for opt-in harnesses (voice regression) — reuses one if already set.
+#[cfg(test)]
+pub(crate) fn init_in_memory() {
+    DB.get_or_init(|| {
+        let conn = Connection::open_in_memory().expect("in-memory sqlite");
+        migrate(&conn).expect("memory schema");
+        Mutex::new(conn)
+    });
+}
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;

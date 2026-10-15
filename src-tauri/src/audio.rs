@@ -41,6 +41,9 @@ pub struct StartResult {
 /// Receives ~100 ms chunks of 16 kHz mono s16le PCM while recording (must not block).
 pub type PcmSink = Box<dyn FnMut(Vec<u8>) + Send>;
 
+/// Throttled level callback for the Settings meter (keeps the capture path free of Tauri types).
+pub(crate) type LevelEmitter = Arc<dyn Fn(f32) + Send + Sync>;
+
 /// 100 ms at 16 kHz — the chunk size the Live API docs recommend.
 const PCM_CHUNK_SAMPLES: usize = 1_600;
 
@@ -239,7 +242,7 @@ impl AudioRecorder {
                                     &resolved.device,
                                     None,
                                     mon_err,
-                                    Some(app.clone()),
+                                    Some(level_emitter(app.clone())),
                                     Arc::clone(&level_bits),
                                 )?;
                                 built
@@ -372,6 +375,11 @@ impl AudioRecorder {
         let _ = reply_rx.recv_timeout(Duration::from_millis(500));
     }
 
+    /// Recording right now (lock-free; no round trip to the audio thread).
+    pub fn is_capturing(&self) -> bool {
+        self.recording.load(Ordering::SeqCst)
+    }
+
     pub fn is_monitoring(&self) -> bool {
         self.monitoring.load(Ordering::SeqCst)
     }
@@ -402,14 +410,14 @@ pub fn list_microphones() -> Result<Vec<MicrophoneInfo>, String> {
     Ok(out)
 }
 
-struct ResolvedDevice {
-    device: Device,
-    name: String,
-    used_fallback: bool,
-    notice: Option<String>,
+pub(crate) struct ResolvedDevice {
+    pub device: Device,
+    pub name: String,
+    pub used_fallback: bool,
+    pub notice: Option<String>,
 }
 
-fn resolve_input_device(preferred: Option<&str>) -> Result<ResolvedDevice, String> {
+pub(crate) fn resolve_input_device(preferred: Option<&str>) -> Result<ResolvedDevice, String> {
     let host = cpal::default_host();
     let preferred = preferred.map(str::trim).filter(|s| !s.is_empty());
 
@@ -463,11 +471,11 @@ fn resolve_input_device(preferred: Option<&str>) -> Result<ResolvedDevice, Strin
     })
 }
 
-fn build_capture_stream(
+pub(crate) fn build_capture_stream(
     device: &Device,
     samples: Option<Arc<Mutex<Vec<f32>>>>,
     last_error: Arc<Mutex<Option<String>>>,
-    level_app: Option<AppHandle>,
+    level_app: Option<LevelEmitter>,
     level_bits: Arc<AtomicU32>,
 ) -> Result<(cpal::Stream, u32), String> {
     let config = device
@@ -619,12 +627,18 @@ fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
     out
 }
 
+fn level_emitter(app: AppHandle) -> LevelEmitter {
+    Arc::new(move |level| {
+        let _ = app.emit("soul://mic-level", MicLevelPayload { level });
+    })
+}
+
 fn update_level(
     interleaved: &[f32],
     channels: usize,
     level_bits: &AtomicU32,
     last_emit: &Mutex<Instant>,
-    app: Option<&AppHandle>,
+    app: Option<&LevelEmitter>,
 ) {
     if interleaved.is_empty() {
         return;
@@ -660,7 +674,7 @@ fn update_level(
     let level = (peak * 0.65 + rms * 1.35).clamp(0.0, 1.0);
     level_bits.store(level.to_bits(), Ordering::Relaxed);
 
-    let Some(app) = app else {
+    let Some(emit) = app else {
         return;
     };
 
@@ -669,7 +683,7 @@ fn update_level(
         return;
     }
     *last = Instant::now();
-    let _ = app.emit("soul://mic-level", MicLevelPayload { level });
+    emit(level);
 }
 
 fn push_mono(interleaved: &[f32], channels: usize, out: &mut Vec<f32>) {

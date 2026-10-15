@@ -14,11 +14,16 @@
 //! Case: `{ "file": "x.wav", "expect": { "route": "command", "tool": "media_control",
 //! "args": { "action": "next" }, "text_contains": "faktur" }, "synthetic": false }`.
 //! Every `expect` key is optional; string args match when the actual value contains the expected
-//! one (case- and diacritic-insensitive), `text_contains` takes a string or a list.
+//! one (case- and diacritic-insensitive), `text_contains` takes a string or a list (diacritic-
+//! insensitive), `text_equals` compares the whole text ignoring case and punctuation but NOT
+//! diacritics ("Zażółć gęślą jaźń" ≠ "Zazolc gesla jazn").
+//! Scenes come from `tests/voice/scenes.json` (in-memory DB; the user's own DB is never touched).
 //!
 //! Env: `SOUL_VOICE_FILTER` (substring of the file name), `SOUL_VOICE_DELAY_MS` (pause between
-//! cases, default 4000 for the free tier), `SOUL_TEST_LANGUAGE`, `SOUL_TEST_WAKE_WORD`,
-//! `SOUL_TEST_DICTATION_MODEL`, `SOUL_TEST_COMMANDS_MODEL`.
+//! cases, default 4000 for the free tier), `SOUL_VOICE_REPORT` (report file name, default
+//! report.md), `SOUL_TEST_LANGUAGE`, `SOUL_TEST_WAKE_WORD`, `SOUL_TEST_DICTATION_MODEL`,
+//! `SOUL_TEST_COMMANDS_MODEL`, `SOUL_TEST_DICTATION_PROMPT=1` (send
+//! `live::POLISH_TRANSCRIPTION_HINT` to the transcription session).
 
 use crate::agent::{self, Intent};
 use crate::ai::gemini::{
@@ -34,6 +39,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const REPORT_FILE: &str = "report.md";
+const SCENES_FILE: &str = "scenes.json";
 /// 100 ms of 16 kHz s16le mono, as the PCM feeder sends it.
 const CHUNK_BYTES: usize = 3_200;
 /// Stream at 4× real time (the smoke test's pace) to keep runs short.
@@ -49,6 +55,23 @@ fn env_or(name: &str, default: &str) -> String {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+fn dictation_prompt() -> bool {
+    std::env::var("SOUL_TEST_DICTATION_PROMPT").is_ok_and(|v| v == "1")
+}
+
+/// Fixture scenes → in-memory memory DB, so trigger phrases route like in the app.
+fn load_scenes(dir: &Path) {
+    crate::memory::init_in_memory();
+    let Ok(raw) = std::fs::read_to_string(dir.join(SCENES_FILE)) else {
+        return;
+    };
+    let scenes: Vec<crate::scenes::Scene> =
+        serde_json::from_str(&raw).expect("tests/voice/scenes.json: list of scenes");
+    for scene in scenes {
+        crate::scenes::save(scene).expect("fixture scene");
+    }
 }
 
 fn test_settings() -> Settings {
@@ -169,7 +192,11 @@ impl Pipeline {
         let dictation = LiveSession::spawn("dictation");
         let commands = LiveSession::spawn("commands");
         if settings.use_live_api {
-            dictation.configure(live::dictation_setup(&settings));
+            let mut setup = live::dictation_setup(&settings);
+            if dictation_prompt() {
+                setup = setup.with_instruction(live::POLISH_TRANSCRIPTION_HINT);
+            }
+            dictation.configure(setup);
             commands.configure(live::commands_setup(&settings));
             std::thread::sleep(WARMUP);
         }
@@ -221,7 +248,8 @@ impl Pipeline {
             via: "",
             total_ms: 0,
         };
-        match agent::classify_smart(&transcript, &self.settings.wake_word) {
+        // No focused app in the harness: the text-field signal is unknown, as on Linux.
+        match agent::classify_smart(&transcript, &self.settings.wake_word, &|| None) {
             Intent::Command { text, reason } => {
                 run.route = "command";
                 run.reason = reason;
@@ -360,6 +388,20 @@ fn fold_text(s: &str) -> String {
         .join(" ")
 }
 
+/// Lowercase words without punctuation; diacritics kept.
+fn exact_text(s: &str) -> String {
+    s.split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        })
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn value_matches(expected: &Value, actual: Option<&Value>) -> bool {
     let Some(actual) = actual else {
         return false;
@@ -406,7 +448,13 @@ fn check(expect: &Value, run: &Run) -> Vec<String> {
         Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
         _ => Vec::new(),
     };
-    let hay = fold_text(if run.text.is_empty() { &run.transcript } else { &run.text });
+    let text = if run.text.is_empty() { &run.transcript } else { &run.text };
+    if let Some(want) = expect["text_equals"].as_str() {
+        if exact_text(text) != exact_text(want) {
+            fails.push(format!("text \u{201e}{text}\u{201d} ≠ \u{201e}{want}\u{201d}"));
+        }
+    }
+    let hay = fold_text(text);
     for n in needles {
         if !hay.contains(&fold_text(n)) {
             fails.push(format!("text lacks \u{201e}{n}\u{201d}"));
@@ -431,6 +479,9 @@ fn describe_expect(expect: &Value) -> String {
     match &expect["text_contains"] {
         Value::Null => {}
         v => parts.push(format!("text∋{v}")),
+    }
+    if let Some(t) = expect["text_equals"].as_str() {
+        parts.push(format!("text=\u{201e}{t}\u{201d}"));
     }
     if parts.is_empty() {
         "—".into()
@@ -471,9 +522,10 @@ fn render(settings: &Settings, rows: &[Row], wall: Duration) -> String {
     let mut out = String::new();
     out.push_str("# Voice regression report\n\n");
     out.push_str(&format!(
-        "{} · dictation `{}` · commands `{}` · REST `{}` → `{}` · language `{}` · wake word `{}` · tools **dry-run**\n\n",
+        "{} · dictation `{}`{} · commands `{}` · REST `{}` → `{}` · language `{}` · wake word `{}` · tools **dry-run**\n\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M"),
         settings.dictation_model,
+        if dictation_prompt() { " + Polish prompt" } else { "" },
         settings.commands_model,
         settings.effective_ask_model(),
         settings.fallback_model,
@@ -539,6 +591,7 @@ fn voice_regression() {
 
     let settings = test_settings();
     std::env::set_var("SOUL_DRY_RUN", "1");
+    load_scenes(&dir);
     let started = Instant::now();
     let pipeline = Pipeline::new(settings.clone());
     let mut rows = Vec::new();
@@ -621,7 +674,7 @@ fn voice_regression() {
     }
 
     let report = render(&settings, &rows, started.elapsed());
-    let path = dir.join(REPORT_FILE);
+    let path = dir.join(env_or("SOUL_VOICE_REPORT", REPORT_FILE));
     std::fs::write(&path, &report).expect("write report.md");
     println!("\n{report}\nreport → {}", path.display());
 
@@ -667,6 +720,10 @@ mod tests {
         assert!(check(&json!({ "args": { "level": 30, "q": "lofi" } }), &r).is_empty());
         assert!(check(&json!({ "args": { "level": 30, "q": "hip hop" } }), &r).is_empty());
         assert_eq!(check(&json!({ "args": { "q": "jazz" } }), &r).len(), 1);
+
+        let r = run("dictation", "Zażółć, gęślą jaźń!", None);
+        assert!(check(&json!({ "text_equals": "zażółć gęślą jaźń" }), &r).is_empty());
+        assert_eq!(check(&json!({ "text_equals": "Zazolc gesla jazn" }), &r).len(), 1);
 
         let r = run("dictation", "Proszę o fakturę za październik.", None);
         assert!(check(&json!({ "text_contains": "faktur" }), &r).is_empty());

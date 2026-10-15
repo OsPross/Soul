@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:voice": "cargo test --manifest-path src-tauri/Cargo.toml --lib voice_regression::voice_regression -- --ignored --nocapture --exact",
+    "test:voice": "node scripts/test-voice.mjs",
     "test:voice:synth": "cargo test --manifest-path src-tauri/Cargo.toml --lib voice_synth::voice_synth -- --ignored --nocapture --exact"
   },
   "dependencies": {

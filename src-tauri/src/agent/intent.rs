@@ -5,7 +5,10 @@
 //! 2. has a command verb (otwórz, zamknij, wyszukaj, ścisz, następna, pauza, open…) among its
 //!    first four words after Polish filler openers ("weź mi", "czy możesz", "ej", "proszę"), or an
 //!    infinitive right after a request form ("możesz mi znaleźć…"), and is short enough, or
-//! 3. is a short utterance the deterministic pre-router recognizes ("następna piosenka").
+//! 3. is a short utterance the deterministic pre-router recognizes ("następna piosenka"), or a
+//!    lone greeting ("Dzień dobry." — but "Dzień dobry," starts a letter), or
+//! 4. is a short question ("Słuchaj, jak ugotować spaghetti?") — unless a text field has focus,
+//!    where a question is far more likely dictated into a chat or document.
 //!
 //! Everything else is dictation. Matching is diacritic-insensitive (otwórz = otworz).
 
@@ -16,6 +19,14 @@ use super::router;
 const MAX_VERB_COMMAND_WORDS: usize = 12;
 /// The pre-router matches keywords anywhere ("dalej", "stop"…) — only trust it on short text.
 const MAX_PREROUTER_WORDS: usize = 6;
+/// Question rule: fewer words than this after fillers, and the transcript ends with "?".
+const MAX_QUESTION_WORDS: usize = 12;
+
+const QUESTION_WORDS: &[&str] = &[
+    "jak", "co", "gdzie", "kiedy", "dlaczego", "czemu", "ile", "kto", "jaki", "jaka", "jakie",
+    "jakiego", "ktory", "ktora", "ktore", "skad", "dokad",
+    "how", "what", "whats", "where", "when", "why", "who", "which",
+];
 
 /// First words (ASCII-folded) that make an utterance a command. Polish imperatives + English.
 const COMMAND_VERBS: &[&str] = &[
@@ -24,7 +35,8 @@ const COMMAND_VERBS: &[&str] = &[
     "wygoogluj", "scisz", "podglosnij", "wycisz", "nastepna", "nastepny", "nastepne",
     "poprzednia", "poprzedni", "pauza", "zatrzymaj", "wznow", "przypomnij", "pokaz", "pusc",
     "zagraj", "odtworz", "przelacz", "ustaw", "przejdz", "sprawdz", "nastaw", "zanotuj",
-    "zapamietaj", "zapomnij", "mow", "stworz", "utworz", "odlicz",
+    "zapamietaj", "zapomnij", "mow", "stworz", "utworz", "odlicz", "zapauzuj", "spauzuj",
+    "pauzuj", "wstrzymaj", "odtwarzaj",
     // English
     "open", "launch", "close", "quit", "search", "google", "mute", "unmute", "pause", "resume",
     "skip", "next", "previous", "remind", "show", "play", "find", "remember", "forget",
@@ -53,7 +65,18 @@ pub enum Intent {
     },
 }
 
+#[cfg(test)]
 pub fn classify(transcript: &str, wake_word: &str) -> Intent {
+    classify_with(transcript, wake_word, &|| None)
+}
+
+/// `text_field_focused` is asked only when the question rule would fire: `Some(true)` keeps a
+/// question as dictation, `None` (unknown) / `Some(false)` route it as a command.
+pub fn classify_with(
+    transcript: &str,
+    wake_word: &str,
+    text_field_focused: &dyn Fn() -> Option<bool>,
+) -> Intent {
     let raw = transcript.trim();
     if raw.is_empty() {
         return Intent::Dictation;
@@ -103,14 +126,39 @@ pub fn classify(transcript: &str, wake_word: &str) -> Intent {
         }
     }
 
-    // Greetings stay dictation unless the wake word was used ("Soul, dzień dobry").
-    if words.len() - filler <= MAX_PREROUTER_WORDS
-        && !router::is_morning_greeting(rest)
-        && router::match_command(raw).is_some()
-    {
+    // A greeting that opens a letter ("Dzień dobry, …") stays dictation; said alone it is the
+    // morning briefing.
+    if router::is_morning_greeting(rest) {
+        let alone = rest.len() == 2
+            || (rest.len() == 3 && wake_key(&rest[2]) == wake_key(&fold_word(wake_word)));
+        return if alone && !raw.ends_with(',') && !raw.ends_with(':') {
+            Intent::Command {
+                text: raw.to_string(),
+                reason: "greeting",
+            }
+        } else {
+            Intent::Dictation
+        };
+    }
+    if words.len() - filler <= MAX_PREROUTER_WORDS && router::match_command(raw).is_some() {
         return Intent::Command {
             text: raw.to_string(),
             reason: "pre-router",
+        };
+    }
+
+    if raw.ends_with('?')
+        && words.len() - filler < MAX_QUESTION_WORDS
+        && rest
+            .first()
+            .is_some_and(|w| QUESTION_WORDS.contains(&w.as_str()))
+    {
+        if text_field_focused() == Some(true) {
+            return Intent::Dictation;
+        }
+        return Intent::Command {
+            text: raw.to_string(),
+            reason: "question",
         };
     }
 
@@ -123,10 +171,11 @@ fn wake_word_len(folded: &[String], wake_word: &str) -> Option<usize> {
     if wake.is_empty() {
         return None;
     }
+    let key = wake_key(&wake);
     let is_wake = |w: &str| {
         w == wake
-            || w == format!("{wake}u") // Polish vocative: "Soulu"
-            || (wake == "soul" && matches!(w, "sol" | "solu" | "seoul"))
+            || wake_key(w) == key // Soulu, Soula, Sołl, Sol, Sól
+            || (wake == "soul" && w == "seoul")
     };
     match folded {
         [first, ..] if is_wake(first) => Some(1),
@@ -139,6 +188,22 @@ fn wake_word_len(folded: &[String], wake_word: &str) -> Option<usize> {
 
 fn fold_word(w: &str) -> String {
     router::fold_word(w)
+}
+
+/// Loose spelling of a (folded) wake word: no doubled letters, "ou" → "o", and one Polish case
+/// ending dropped — "soulu", "soula", "soll" (Sołl), "sol" (Sól) all become "sol".
+fn wake_key(w: &str) -> String {
+    let mut k = String::new();
+    for c in w.chars() {
+        if !k.ends_with(c) {
+            k.push(c);
+        }
+    }
+    let mut k = k.replace("ou", "o");
+    if k.chars().count() > 3 && (k.ends_with('u') || k.ends_with('a')) {
+        k.pop();
+    }
+    k
 }
 
 #[cfg(test)]
@@ -235,6 +300,88 @@ mod tests {
         assert_eq!(classify("Możesz przyjść jutro?", "Soul"), Intent::Dictation);
         assert_eq!(classify("Dzień dobry,", "Soul"), Intent::Dictation);
         assert!(is_cmd("Soul, dzień dobry"));
+    }
+
+    #[test]
+    fn media_inflections_are_commands() {
+        for t in [
+            "Zapauzuj muzykę.", "Spauzuj.", "Zatrzymaj muzykę.", "Wstrzymaj muzykę",
+            "Odtwarzaj muzykę.", "Odtwórz muzykę", "Puść muzykę", "Wznów.", "Graj dalej.",
+            "Włącz muzykę", "Puść dalej",
+        ] {
+            assert!(is_cmd(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn now_playing_questions_are_commands() {
+        for t in ["Co teraz mi leci?", "Co leci?", "co mi teraz gra", "Jaka to piosenka?", "Co to za utwór?"] {
+            assert!(is_cmd(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn short_questions_are_commands_unless_typing() {
+        assert_eq!(
+            classify("Słuchaj, jak ugotować spaghetti?", "Soul"),
+            Intent::Command {
+                text: "Słuchaj, jak ugotować spaghetti?".into(),
+                reason: "question"
+            }
+        );
+        assert!(is_cmd("Powiedz mi, ile jest dni w lutym?"));
+        assert!(is_cmd("A gdzie jest najbliższa apteka?"));
+        assert!(is_cmd("Ej, kiedy jest Wielkanoc?"));
+        // Text field focused: the question is being typed somewhere.
+        assert_eq!(
+            classify_with("Jak się masz?", "Soul", &|| Some(true)),
+            Intent::Dictation
+        );
+        assert!(matches!(classify_with("Jak się masz?", "Soul", &|| Some(false)), Intent::Command { .. }));
+        // No question mark, a statement, or too long → dictation.
+        assert_eq!(classify("Jak już mówiłem, spotkanie jest w piątek.", "Soul"), Intent::Dictation);
+        assert_eq!(classify("Wiesz może, co z tym zrobić?", "Soul"), Intent::Dictation);
+        assert_eq!(
+            classify("Jak myślisz, czy powinniśmy przenieść spotkanie zespołu na przyszły tydzień po świętach?", "Soul"),
+            Intent::Dictation
+        );
+    }
+
+    #[test]
+    fn fuzzy_wake_word() {
+        for t in ["Soul, otwórz notatnik", "Sol, która godzina", "Soula, ścisz", "Sołl, pauza", "Hej Soul, co gra", "Hej, Soul, pauza", "Soulu, pomóż"] {
+            assert!(
+                matches!(classify(t, "Soul"), Intent::Command { reason: "wake-word", .. }),
+                "{t}"
+            );
+        }
+        assert_eq!(classify("Solidny plan na weekend.", "Soul"), Intent::Dictation);
+        assert_eq!(classify("Solo na gitarze było świetne.", "Soul"), Intent::Dictation);
+    }
+
+    #[test]
+    fn lone_greeting_is_briefing() {
+        assert!(matches!(classify("Dzień dobry.", "Soul"), Intent::Command { reason: "greeting", .. }));
+        assert!(is_cmd("Dzień dobry, Soul!"));
+        assert!(is_cmd("Good morning"));
+        assert_eq!(classify("Dzień dobry,", "Soul"), Intent::Dictation);
+        assert_eq!(classify("Dzień dobry wszystkim.", "Soul"), Intent::Dictation);
+        assert_eq!(classify("Dzień dobry, przesyłam w załączniku fakturę za październik.", "Soul"), Intent::Dictation);
+    }
+
+    #[test]
+    fn recorded_traps_stay_dictation() {
+        for t in [
+            "Odwiedziłem wczoraj nowy sklep kolegi.",
+            "Proszę o przesłanie raportu do piątku.",
+            "Spotkanie przenosimy na piątek o 10:00.",
+            "Kup mleko, to znaczy kefir i chleb.",
+            "Let's meet tomorrow at 5:00.",
+            "Zażółć gęślą jaźń.",
+            "Dalej nie wiem, co o tym myśleć.",
+        ] {
+            assert_eq!(classify(t, "Soul"), Intent::Dictation, "{t}");
+        }
     }
 
     #[test]

@@ -171,6 +171,10 @@ export default function Settings() {
         window.setTimeout(() => setPreviewing(null), 12_000);
       }
     });
+    // Tray → "Listen for Soul" without a trained wake word opens the Voice page.
+    on<string>("settings://navigate", (p) => {
+      if (NAV.some((n) => n.id === p)) setPage(p as PageId);
+    });
     on<{ speaking: boolean }>("soul://voice-speaking", (p) => {
       if (!p.speaking) setPreviewing(null);
     });

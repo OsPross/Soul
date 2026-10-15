@@ -1,10 +1,186 @@
 [
   {
-    "file": "nastepna.wav",
-    "expect": { "route": "command", "tool": "media_control", "args": { "action": "next" } }
+    "expect": {
+      "args": {
+        "action": "next"
+      },
+      "route": "command",
+      "tool": "media_control"
+    },
+    "file": "nastepna.wav"
   },
   {
-    "file": "dyktowanie_faktura.wav",
-    "expect": { "route": "dictation", "text_contains": "faktur" }
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "pause"
+      }
+    },
+    "file": "pauza.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "media_control",
+      "args": {
+        "action": "play"
+      }
+    },
+    "file": "wznow.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "now_playing"
+    },
+    "file": "co_gra.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "open_app",
+      "args": {
+        "name": "discord"
+      }
+    },
+    "file": "otworz_discord.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "close_app",
+      "args": {
+        "name": "spotify"
+      }
+    },
+    "file": "zamknij_spotify.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "web_search",
+      "args": {
+        "query": "pierogi"
+      }
+    },
+    "file": "wez_znajdz.wav"
+  },
+  {
+    "expect": {
+      "route": "command"
+    },
+    "file": "pytanie_spaghetti.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "remember"
+    },
+    "file": "zapamietaj.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "recall"
+    },
+    "file": "co_pamietasz.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "set_timer",
+      "args": {
+        "seconds": 600
+      }
+    },
+    "file": "timer.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "cancel_timer"
+    },
+    "file": "anuluj_timer.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "run_scene",
+      "args": {
+        "name": "granie"
+      }
+    },
+    "file": "scena_granie.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "morning_briefing"
+    },
+    "file": "dzien_dobry.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "set_voice_volume"
+    },
+    "file": "mow_ciszej.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation",
+      "text_contains": [
+        "faktur",
+        "październik"
+      ]
+    },
+    "file": "dykt_faktura.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation",
+      "text_contains": "piątek"
+    },
+    "file": "dykt_poprawka.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation",
+      "text_contains": [
+        "kefir",
+        "chleb"
+      ]
+    },
+    "file": "dykt_kefir.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation",
+      "text_equals": "Zażółć gęślą jaźń"
+    },
+    "file": "dykt_polskie.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation",
+      "text_contains": [
+        "meet",
+        "tomorrow"
+      ]
+    },
+    "file": "dykt_angielski.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation"
+    },
+    "file": "pulapka_otworz.wav"
+  },
+  {
+    "expect": {
+      "route": "dictation"
+    },
+    "file": "pulapka_prosze.wav"
   }
 ]

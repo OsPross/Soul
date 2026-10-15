@@ -26,6 +26,7 @@ import {
 } from "./model";
 import type { SettingsCtx } from "./Settings";
 import { Button, Callout, Card, Keycap, Row, Segmented, Select, Slider, Toggle } from "./ui";
+import { WakeWordCard } from "./WakeWord";
 
 type P = { s: SettingsCtx };
 
@@ -471,6 +472,8 @@ export function VoicePage({ s }: P) {
   const voiceOn = form.voiceEnabled ?? true;
   return (
     <>
+      <WakeWordCard />
+
       <Card
         title={tr(lang, "Mówione odpowiedzi", "Spoken replies")}
         action={<Toggle checked={voiceOn} onChange={(voiceEnabled) => patch({ voiceEnabled })} />}

@@ -95,6 +95,12 @@ pub trait Platform: Send + Sync {
 
     /// "Do Not Disturb" (notification banners off / on) for scenes. Best effort per desktop.
     fn set_do_not_disturb(&self, on: bool) -> Result<String, String>;
+
+    /// Whether the focused element is an editable text field (Smart routing keeps short
+    /// questions as dictation there). `None` = unknown. Bounded (~150 ms); worker threads only.
+    fn text_input_focused(&self) -> Option<bool> {
+        None
+    }
 }
 
 pub fn create_platform() -> Arc<dyn Platform> {
@@ -114,6 +120,19 @@ pub fn create_platform() -> Arc<dyn Platform> {
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         compile_error!("Soul currently supports Windows and Linux only");
+    }
+}
+
+/// Run the calling thread below normal priority (background audio analysis, e.g. the wake word).
+/// Best effort: failures are ignored.
+pub fn lower_current_thread_priority() {
+    #[cfg(target_os = "windows")]
+    windows::lower_current_thread_priority();
+    #[cfg(target_os = "linux")]
+    {
+        // Linux applies nice() to the calling thread only.
+        // SAFETY: plain libc call without pointers.
+        let _ = unsafe { libc::nice(10) };
     }
 }
 

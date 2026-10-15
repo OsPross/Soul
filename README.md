@@ -36,6 +36,16 @@ The talk key is read with a low-level hook (`WH_KEYBOARD_LL`/`WH_MOUSE_LL` on Wi
 
 **Polish AltGr:** on Polish layouts Right Alt (AltGr) is reported as Ctrl+Alt, so `Ctrl+Alt+<letter>` hotkeys would fire while typing ć, ą, ę… Soul therefore (a) ignores hotkey presses while Right Alt is held (Windows, `GetAsyncKeyState(VK_RMENU)`), (b) rejects `Ctrl+Alt+<letter>` in Settings, and (c) migrates old saved `Ctrl+Alt+…` hotkeys to the defaults above. The talk-key hook ignores the fake Left Ctrl that AltGr generates and refuses Right Alt as the talk key.
 
+### Wake word „Soul” (offline)
+
+Settings → **Głos i dusza → Słowo-klucz „Soul”**: say „Soul” instead of holding a key. Detection runs **only on this computer** ([rustpotter](https://github.com/GiviMAD/rustpotter) 3.0.2, MFCC + DTW against your own samples, no API key); the microphone reaches Gemini only after the word is detected.
+
+1. **Trenuj słowo-klucz** → record 6–8 takes of „Soul” (1.8 s window each) → **Zbuduj słowo-klucz**. Each sample is scored against a model built from the others; re-record outliers. Saved as `wakeword/soul.rpw` in the app data dir.
+2. Turn on the switch (or tray → *Listen for “Soul”*). A small mic glyph on the Island shows it's on (bright = listening, dim = paused).
+3. **Test** shows the live score against the threshold without starting a turn. **Czułość** (sensitivity) trades misses for false alarms.
+
+After „Soul” it behaves exactly like holding the talk key: start sound, listening state, recording until 1.2 s of silence (8 s cap), then the same smart routing (command vs dictation). Detection pauses while Soul speaks (+0.7 s echo tail), during any recording or processing, while Circle-to-Ask is open, for 2 s after a detection, and — with *Wstrzymuj w grach* (default on) — while a fullscreen app/game is focused (Windows `SHQueryUserNotificationState`, X11 `_NET_WM_STATE_FULLSCREEN`). The listener runs on its own below-normal-priority thread with its own mic stream; measured ≈0.5% of one core (optimized build, 0.02% of a 24-thread CPU). Detections, scores and likely false positives (no speech after the word) are logged as `[soul][wake]`. Offline harness: `npm run test:voice -- --wake` (see below).
+
 ### Voice replies & personality
 
 Commands and questions are answered out loud with the Live API's native audio (`responseModalities: AUDIO`, 24 kHz PCM played via cpal). Short confirmations („Otwieram Spotify.”) and longer answers are spoken and shown on the Island with a waveform. Press the talk key while Soul speaks to interrupt it. Settings → **Głos i dusza** (Voice & soul): on/off, voice (Charon, Puck, Kore, Fenrir, Aoede, Leda, Orus, Zephyr) with **Preview**, speaking speed (slow/normal/fast, applied through the prompt; native-audio models have no rate setting), and *Only confirm briefly*; personality presets **Neutralny**, **Ziomek**, **Profesjonalny**, **Sarkastyczny**. They change only the tone of spoken replies; dictation stays neutral. **Głośność głosu Soul** (0–100%, only Soul's voice) and *Ściszaj muzykę, gdy Soul mówi* (other apps drop to 30% during a reply). Replies always use the configured language (Polish by default, `speechConfig.languageCode` = `pl-PL`) — never a language picked from the topic.
@@ -79,6 +89,10 @@ SOUL_TEST_KEY=<key> npm run test:voice:synth   # optional: synthetic Polish samp
 ```
 
 Record real samples in a dev build: Settings → Zaawansowane → *Nagraj próbkę testową*. Details: `tests/voice/README.md`.
+
+Wake word (offline, no key): `npm run test:voice -- --wake` trains on `tests/voice/wake/train/`, replays `positive/`
+(clean, +noise, quieter), `positive_other/`, `negative/`, `negative_hard/` and the real recordings above, sweeps
+sensitivities and writes `tests/voice/wake/report.md` (detection rate, false positives / hour, CPU).
 `SOUL_DRY_RUN=1` makes the running app log agent tools instead of executing them.
 
 ### Dynamic Island — how to test

@@ -40,6 +40,11 @@ url = "2"
 chrono-tz = "0.10"
 # Local memory / scenes store (SQLite compiled in — no system library needed).
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Offline wake word ("Soul"): pure-Rust MFCC + DTW spotter, trained locally from user samples.
+rustpotter = "3.0.2"
+# rustpotter's candle-core 0.2 needs half on rand_distr 0.4 (half >= 2.5 moved to 0.5). Direct
+# pin so `cargo update` can't break the build.
+half = "=2.4.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -55,6 +60,8 @@ windows = { version = "0.58", features = [
   "Win32_System_Variant",
   "Win32_System_LibraryLoader",
   "Win32_System_Power",
+  "Win32_System_Threading",
+  "Win32_UI_Accessibility",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
@@ -64,6 +71,8 @@ windows = { version = "0.58", features = [
 zbus = { version = "4", default-features = false, features = ["blocking"] }
 # XRecord: passive global key/button snooping for the Smart talk key on X11 (pure Rust).
 x11rb = { version = "0.13", features = ["record"] }
+# nice() for the low-priority wake word thread (already in the tree via cpal/alsa).
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1

@@ -197,18 +197,115 @@ pub fn find(name: &str) -> Option<Scene> {
         .cloned()
 }
 
-/// The whole utterance is one of a scene's trigger phrases ("gramy w FiveM").
+/// Trigger phrase match needs at least this similarity (0–1).
+const TRIGGER_THRESHOLD: f32 = 0.8;
+/// …and no single word may be further off than this ("gramy w fifę" ≠ "gramy w FiveM").
+const TOKEN_FLOOR: f32 = 0.6;
+/// A multi-word trigger may sit inside an utterance with at most this many extra words.
+const TRIGGER_EXTRA_WORDS: usize = 3;
+
+/// The utterance is (fuzzily) one of a scene's trigger phrases: „Gramy w five'a” / „gramy w
+/// fajwem” match the trigger „gramy w FiveM”. Best-scoring scene wins.
 pub fn match_trigger(text: &str) -> Option<Scene> {
-    let said = fold(text);
+    let said = phonetic_tokens(text);
     if said.is_empty() {
         return None;
     }
-    list().ok()?.into_iter().find(|s| {
-        s.triggers.iter().any(|t| {
-            let t = fold(t);
-            !t.is_empty() && (said == t || (t.split(' ').count() >= 2 && said.contains(&t)))
+    let mut best: Option<(f32, Scene)> = None;
+    for scene in list().ok()? {
+        let score = scene
+            .triggers
+            .iter()
+            .map(|t| trigger_score(&said, &phonetic_tokens(t)))
+            .fold(0.0, f32::max);
+        if score >= TRIGGER_THRESHOLD && best.as_ref().is_none_or(|(b, _)| score > *b) {
+            best = Some((score, scene));
+        }
+    }
+    best.map(|(_, s)| s)
+}
+
+/// Folded words (lowercase, no diacritics/apostrophes) reduced to a rough phonetic key, so
+/// Polish spellings of English names line up: five'a → fivea, fajwem → fivem, fivem → fivem.
+fn phonetic_tokens(s: &str) -> Vec<String> {
+    s.split_whitespace()
+        .map(crate::agent::fold_word)
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut k = w
+                .replace("ph", "f")
+                .replace("ck", "k")
+                .replace("qu", "kw")
+                .replace('x', "ks")
+                .replace("aj", "i")
+                .replace("ay", "i")
+                .replace('y', "i")
+                .replace('w', "v");
+            // Silent English final e: five → fiv (≈ fajw → fiv).
+            if k.len() > 3 && k.ends_with('e') && !k.ends_with("ie") {
+                k.pop();
+            }
+            k
         })
-    })
+        .collect()
+}
+
+/// Best alignment of the trigger inside the utterance: mean token similarity of the window.
+fn trigger_score(said: &[String], trigger: &[String]) -> f32 {
+    if trigger.is_empty() || said.len() < trigger.len() {
+        return 0.0;
+    }
+    // One-word triggers must be the whole utterance; longer ones may be embedded.
+    let extra = said.len() - trigger.len();
+    if (trigger.len() == 1 && extra > 0) || extra > TRIGGER_EXTRA_WORDS {
+        return 0.0;
+    }
+    (0..=extra)
+        .map(|at| {
+            let sims: Vec<f32> = trigger
+                .iter()
+                .zip(&said[at..])
+                .map(|(t, w)| token_similarity(t, w))
+                .collect();
+            if sims.iter().any(|s| *s < TOKEN_FLOOR) {
+                0.0
+            } else {
+                sims.iter().sum::<f32>() / sims.len() as f32
+            }
+        })
+        .fold(0.0, f32::max)
+}
+
+/// 1.0 for equal tokens or Polish inflections of the same stem (fivem / fivea / fiv), else
+/// normalized Levenshtein similarity. Short words (w, na, do) must match exactly.
+fn token_similarity(a: &str, b: &str) -> f32 {
+    if a == b {
+        return 1.0;
+    }
+    let (la, lb) = (a.chars().count(), b.chars().count());
+    if la.min(lb) <= 2 {
+        return 0.0;
+    }
+    let common = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
+    if common >= 3 && common + 1 >= la.min(lb) {
+        return 1.0;
+    }
+    1.0 - levenshtein(a, b) as f32 / la.max(lb) as f32
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1; b.len() + 1];
+        for (j, cb) in b.iter().enumerate() {
+            cur[j + 1] = (prev[j] + usize::from(ca != *cb))
+                .min(prev[j + 1] + 1)
+                .min(cur[j] + 1);
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }
 
 fn step_label(s: &SceneStep) -> String {
@@ -397,6 +494,37 @@ mod tests {
 
     fn at(min: i64) -> i64 {
         1_700_000_000_000 + min * 60_000
+    }
+
+    fn score(said: &str, trigger: &str) -> f32 {
+        trigger_score(&phonetic_tokens(said), &phonetic_tokens(trigger))
+    }
+
+    #[test]
+    fn fuzzy_trigger_phrases() {
+        for said in [
+            "Gramy w FiveM!",
+            "Gramy w five'a.",
+            "gramy w fajwem",
+            "Gramy w fajwa",
+            "gramy w five",
+            "No to gramy w FiveM",
+            "Grąmy w fivem",
+        ] {
+            assert!(score(said, "gramy w FiveM") >= TRIGGER_THRESHOLD, "{said}");
+        }
+        for said in [
+            "Gramy w szachy.",
+            "Gramy w fifę.",
+            "gramy w Fortnite",
+            "gramy",
+            "Wczoraj długo graliśmy z kolegami w FiveM na serwerze, było super.",
+        ] {
+            assert!(score(said, "gramy w FiveM") < TRIGGER_THRESHOLD, "{said}");
+        }
+        // One-word triggers must be the whole utterance.
+        assert!(score("Kodowanie", "kodowanie") >= TRIGGER_THRESHOLD);
+        assert!(score("Kodowanie w Ruście jest fajne", "kodowanie") < TRIGGER_THRESHOLD);
     }
 
     #[test]

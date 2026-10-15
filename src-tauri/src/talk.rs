@@ -178,7 +178,7 @@ pub fn begin_capture(
     }
 }
 
-fn cancel_capture(app: &AppHandle, gate: &LiveGate) {
+pub(crate) fn cancel_capture(app: &AppHandle, gate: &LiveGate) {
     gate.close();
     let state = app.state::<AppState>();
     if state.recorder.is_recording() {

@@ -22,6 +22,7 @@ import {
   type PlanItem,
 } from "./panels";
 import { playCue, type Cue } from "./sounds";
+import { tr } from "../i18n";
 
 /** Transparent window margin around the panel; must match PAD_X / PAD_B in island/mod.rs. */
 const PAD_X = 20;
@@ -79,14 +80,14 @@ interface ToastAction {
 
 interface Toast {
   id: number;
-  kind: "memory" | "note" | "timer" | "scene" | "info";
+  kind: "memory" | "note" | "timer" | "scene" | "wake" | "info";
   text: string;
   action?: ToastAction | null;
 }
 
 /** Backend commands a toast button may invoke (never anything else). */
 const TOAST_COMMANDS = new Set(["memory_delete", "scene_create_suggested"]);
-const TOAST_MS: Record<Toast["kind"], number> = { memory: 7000, note: 6000, timer: 15000, scene: 15000, info: 6000 };
+const TOAST_MS: Record<Toast["kind"], number> = { memory: 7000, note: 6000, timer: 15000, scene: 15000, wake: 7000, info: 6000 };
 
 /** "4:05", "1:02:03" */
 export function countdown(ms: number): string {
@@ -190,6 +191,7 @@ export default function Island() {
   const [paused, setPaused] = useState(false);
   const [timers, setTimers] = useState<TimerItem[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [wake, setWake] = useState<WakeMicState | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const shownAt = useRef(0);
 
@@ -313,6 +315,9 @@ export default function Island() {
         })
         .catch(() => undefined);
     void loadSnapshot(true);
+    invoke<WakeMicState>("wake_status")
+      .then((w) => alive && setWake(w))
+      .catch(() => undefined);
 
     const tick = window.setInterval(() => {
       const d = new Date();
@@ -333,6 +338,7 @@ export default function Island() {
       if (p.kind !== "timer") cue("notify");
     });
     on<{ cue: Cue }>("soul://sfx", (p) => cue(p.cue));
+    on<WakeMicState>("soul://wake", setWake);
     on<{ name: string; label?: string | null; phase: ToolChip["phase"] }>("island://tool", (c) =>
       setTools((prev): ToolChip[] => {
         if (c.phase === "start")
@@ -597,6 +603,7 @@ export default function Island() {
                   onToastClose={() => setToast(null)}
                   timer={nextTimer}
                   nowMs={nowMs}
+                  wake={wake}
                 />
               )}
             </motion.div>
@@ -723,7 +730,9 @@ function Collapsed({
   onToastClose,
   timer,
   nowMs,
+  wake,
 }: {
+  wake: WakeMicState | null;
   toast: Toast | null;
   onToastAction: (t: Toast) => void;
   onToastClose: () => void;
@@ -781,7 +790,7 @@ function Collapsed({
         <SpiritSlot layoutId={spiritLayout}>{spirit(28)}</SpiritSlot>
         <div className="min-w-0 flex-1">
           <div className="text-[10.5px] font-medium uppercase tracking-wider" style={{ color }}>
-            {toast.kind === "timer" ? "⏰ Timer" : toast.kind === "scene" ? t("island.command") : toast.kind === "note" ? "✎" : "✓"}
+            {toast.kind === "timer" ? "⏰ Timer" : toast.kind === "scene" ? t("island.command") : toast.kind === "note" ? "✎" : toast.kind === "wake" ? "Soul" : "✓"}
           </div>
           <div className="line-clamp-2 text-[12.5px] leading-snug text-white/90">{toast.text}</div>
         </div>
@@ -859,6 +868,7 @@ function Collapsed({
           {timer ? `⏱ ${countdown(timer.endsAtMs - nowMs)}` : clock}
         </span>
         <Marquee text={np.title} className="flex-1 text-[12px] font-medium text-white/90" />
+        <WakeMic wake={wake} />
         <EqBars playing={np.playing} color={accent} />
         <Artwork src={np.artworkDataUrl} size={22} radius={6} />
       </div>
@@ -876,8 +886,30 @@ function Collapsed({
       ) : (
         <span className="flex-1 text-center text-[12px] font-medium tabular-nums tracking-wide text-white/80">{clock}</span>
       )}
-      <span className="w-8" />
+      <span className="flex w-8 justify-end pr-0.5">
+        <WakeMic wake={wake} />
+      </span>
     </div>
+  );
+}
+
+/** `wake::WakeStatus` (only the fields the Island uses). */
+type WakeMicState = { enabled: boolean; trained: boolean; listening: boolean; paused: string | null };
+
+/** Tiny mic glyph while the offline wake word is on: bright = listening, dim = paused. */
+function WakeMic({ wake }: { wake: WakeMicState | null }) {
+  const lang = useAnim().cfg.uiLang;
+  if (!wake?.enabled || !wake.trained) return null;
+  const title = wake.listening
+    ? tr(lang, "Nasłuchuję słowa „Soul” (lokalnie)", "Listening for “Soul” (on-device)")
+    : tr(lang, `Słowo „Soul” wstrzymane (${wake.paused ?? ""})`, `“Soul” paused (${wake.paused ?? ""})`);
+  return (
+    <span title={title} aria-label={title} className="inline-flex shrink-0 items-center" style={{ opacity: wake.listening ? 0.85 : 0.3 }}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+      </svg>
+    </span>
   );
 }
 

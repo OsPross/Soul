@@ -171,7 +171,7 @@ impl Platform for LinuxX11Platform {
     fn power_state(&self) -> super::PowerState {
         super::PowerState {
             on_battery: sysfs_on_battery(),
-            fullscreen: None,
+            fullscreen: x11_fullscreen(),
         }
     }
 
@@ -339,6 +339,69 @@ impl Platform for LinuxX11Platform {
     fn configure_input_hook(&self, config: super::hook::HookConfig) {
         super::x11_hook::configure(config);
     }
+}
+
+/// Cached X connection + the three EWMH atoms (connecting every poll is wasteful).
+struct FullscreenProbe {
+    conn: x11rb::rust_connection::RustConnection,
+    root: u32,
+    active: u32,
+    state: u32,
+    fullscreen: u32,
+}
+
+static FULLSCREEN_PROBE: once_cell::sync::Lazy<Mutex<Option<FullscreenProbe>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+impl FullscreenProbe {
+    fn connect() -> Option<Self> {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+        let (conn, screen) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen)?.root;
+        let atom = |name: &[u8]| -> Option<u32> { Some(conn.intern_atom(false, name).ok()?.reply().ok()?.atom) };
+        let active = atom(b"_NET_ACTIVE_WINDOW")?;
+        let state = atom(b"_NET_WM_STATE")?;
+        let fullscreen = atom(b"_NET_WM_STATE_FULLSCREEN")?;
+        Some(Self { conn, root, active, state, fullscreen })
+    }
+
+    fn query(&self) -> Option<bool> {
+        use x11rb::protocol::xproto::{AtomEnum, ConnectionExt};
+        let win = self
+            .conn
+            .get_property(false, self.root, self.active, AtomEnum::WINDOW, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()?
+            .next()
+            .unwrap_or(0);
+        if win == 0 {
+            return Some(false);
+        }
+        let states = self
+            .conn
+            .get_property(false, win, self.state, AtomEnum::ATOM, 0, 64)
+            .ok()?
+            .reply()
+            .ok()?;
+        let fullscreen = states.value32()?.any(|a| a == self.fullscreen);
+        Some(fullscreen)
+    }
+}
+
+/// EWMH: the active window has `_NET_WM_STATE_FULLSCREEN`. None = no X / no EWMH WM.
+fn x11_fullscreen() -> Option<bool> {
+    let mut probe = FULLSCREEN_PROBE.lock();
+    if probe.is_none() {
+        *probe = FullscreenProbe::connect();
+    }
+    let result = probe.as_ref()?.query();
+    if result.is_none() {
+        // Connection broke (X restart…): reconnect next time.
+        *probe = None;
+    }
+    result
 }
 
 /// True when a battery is present and no AC adapter reports `online` (Linux sysfs).

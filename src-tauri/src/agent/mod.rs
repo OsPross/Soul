@@ -4,7 +4,7 @@
 mod intent;
 mod router;
 
-pub use intent::{classify, Intent};
+pub use intent::{classify_with, Intent};
 pub(crate) use router::fold_word;
 
 use crate::ai::gemini::{
@@ -76,15 +76,20 @@ pub fn barge_in(app: &AppHandle) {
 }
 
 /// Smart talk key routing: a scene trigger phrase ("gramy w FiveM") is always a command,
-/// everything else goes through the dictation/command classifier.
-pub fn classify_smart(transcript: &str, wake_word: &str) -> Intent {
+/// everything else goes through the dictation/command classifier (`text_field_focused`: see
+/// `intent::classify_with`).
+pub fn classify_smart(
+    transcript: &str,
+    wake_word: &str,
+    text_field_focused: &dyn Fn() -> Option<bool>,
+) -> Intent {
     if crate::scenes::match_trigger(transcript).is_some() {
         return Intent::Command {
             text: transcript.trim().to_string(),
             reason: "scene-trigger",
         };
     }
-    classify(transcript, wake_word)
+    classify_with(transcript, wake_word, text_field_focused)
 }
 
 /// Deterministic routing: user scene triggers first, then the Polish/English pre-router.

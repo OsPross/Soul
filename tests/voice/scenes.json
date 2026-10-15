@@ -1,0 +1,11 @@
+[
+  {
+    "name": "granie",
+    "triggers": ["gramy w FiveM", "odpalamy FiveM", "czas na FiveM"],
+    "steps": [
+      { "type": "open_app", "value": "Discord" },
+      { "type": "open_app", "value": "FiveM" },
+      { "type": "set_volume", "value": "40" }
+    ]
+  }
+]

@@ -130,6 +130,16 @@ Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle }
 static DUCKED: Mutex<Vec<(String, f32)>> = Mutex::new(Vec::new());
 
 /// Scale (or restore) every other process's WASAPI session volume on the default output.
+pub(super) fn lower_current_thread_priority() {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // SAFETY: pseudo-handle of the calling thread; no memory is passed.
+    if let Err(e) = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) } {
+        eprintln!("[soul][platform] lower thread priority failed: {e}");
+    }
+}
+
 fn duck_sessions(factor: Option<f32>) -> Result<(), String> {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
@@ -193,7 +203,44 @@ fn duck_sessions(factor: Option<f32>) -> Result<(), String> {
     Ok(())
 }
 
+/// UI Automation: focused element is an Edit, or exposes a writable Value pattern.
+fn focused_is_text_input() -> Option<bool> {
+    use windows::core::Interface;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationValuePattern, UIA_DocumentControlTypeId,
+        UIA_EditControlTypeId, UIA_ValuePatternId,
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let uia: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+        let el = uia.GetFocusedElement().ok()?;
+        let kind = el.CurrentControlType().ok()?;
+        let read_only = el
+            .GetCurrentPattern(UIA_ValuePatternId)
+            .ok()
+            .and_then(|p| p.cast::<IUIAutomationValuePattern>().ok())
+            .and_then(|v| v.CurrentIsReadOnly().ok())
+            .map(|b| b.as_bool());
+        Some(match read_only {
+            Some(ro) => !ro && (kind == UIA_EditControlTypeId || kind == UIA_DocumentControlTypeId),
+            None => kind == UIA_EditControlTypeId,
+        })
+    }
+}
+
 impl Platform for WindowsPlatform {
+    fn text_input_focused(&self) -> Option<bool> {
+        // UIA can stall on a hung target app — never wait for it longer than the budget.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(focused_is_text_input());
+        });
+        rx.recv_timeout(std::time::Duration::from_millis(150)).ok().flatten()
+    }
+
     fn duck_other_audio(&self, factor: Option<f32>) -> Result<(), String> {
         duck_sessions(factor.map(|f| f.clamp(0.0, 1.0)))
     }
