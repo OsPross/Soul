@@ -11,21 +11,21 @@
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "media_control",
       "args": {
         "action": "pause"
-      }
+      },
+      "route": "command",
+      "tool": "media_control"
     },
     "file": "pauza.wav"
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "media_control",
       "args": {
         "action": "play"
-      }
+      },
+      "route": "command",
+      "tool": "media_control"
     },
     "file": "wznow.wav"
   },
@@ -38,31 +38,31 @@
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "open_app",
       "args": {
         "name": "discord"
-      }
+      },
+      "route": "command",
+      "tool": "open_app"
     },
     "file": "otworz_discord.wav"
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "close_app",
       "args": {
         "name": "spotify"
-      }
+      },
+      "route": "command",
+      "tool": "close_app"
     },
     "file": "zamknij_spotify.wav"
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "web_search",
       "args": {
         "query": "pierogi"
-      }
+      },
+      "route": "command",
+      "tool": "web_search"
     },
     "file": "wez_znajdz.wav"
   },
@@ -88,11 +88,11 @@
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "set_timer",
       "args": {
         "seconds": 600
-      }
+      },
+      "route": "command",
+      "tool": "set_timer"
     },
     "file": "timer.wav"
   },
@@ -105,11 +105,11 @@
   },
   {
     "expect": {
-      "route": "command",
-      "tool": "run_scene",
       "args": {
         "name": "granie"
-      }
+      },
+      "route": "command",
+      "tool": "run_scene"
     },
     "file": "scena_granie.wav"
   },
@@ -184,84 +184,90 @@
     "file": "pulapka_prosze.wav"
   },
   {
-    "file": "followup_glosniej.wav",
     "context": [
       {
-        "user": "mów ciszej",
-        "tool": "set_voice_volume",
+        "answer": "Głośność mojego głosu: 80%.",
         "args": {
           "delta": -20
         },
-        "answer": "Głośność mojego głosu: 80%."
+        "tool": "set_voice_volume",
+        "user": "mów ciszej"
       }
     ],
     "expect": {
-      "route": "command",
-      "tool": "set_voice_volume",
       "args": {
         "delta": 20
-      }
-    }
+      },
+      "route": "command",
+      "tool": "set_voice_volume"
+    },
+    "file": "followup_glosniej.wav"
   },
   {
-    "file": "chain_spotify_discord.wav",
     "expect": {
       "route": "command",
       "steps": [
         {
-          "tool": "close_app",
           "args": {
             "name": "spotify"
-          }
+          },
+          "tool": "close_app"
         },
         {
-          "tool": "open_app",
           "args": {
             "name": "discord"
-          }
+          },
+          "tool": "open_app"
         }
       ]
-    }
+    },
+    "file": "chain_spotify_discord.wav"
   },
   {
-    "file": "chain_pauza_sciszyc.wav",
     "expect": {
       "route": "command",
       "steps": [
         {
-          "tool": "media_control",
           "args": {
             "action": "pause"
-          }
+          },
+          "tool": "media_control"
         },
         {
-          "tool": "set_volume",
           "args": {
             "delta": -20
-          }
+          },
+          "tool": "set_volume"
         }
       ]
-    }
+    },
+    "file": "chain_pauza_sciszyc.wav"
   },
   {
-    "file": "tekst_przetlumacz.wav",
     "expect": {
-      "route": "command",
-      "tool": "text_action",
       "args": {
         "action": "translate",
         "language": "English"
-      }
-    }
+      },
+      "route": "command",
+      "tool": "text_action"
+    },
+    "file": "tekst_przetlumacz.wav"
   },
   {
-    "file": "tekst_popraw.wav",
     "expect": {
-      "route": "command",
-      "tool": "text_action",
       "args": {
         "action": "fix"
-      }
-    }
+      },
+      "route": "command",
+      "tool": "text_action"
+    },
+    "file": "tekst_popraw.wav"
+  },
+  {
+    "expect": {
+      "route": "command"
+    },
+    "file": "hain_pauza_sciszyc.wav"
   }
 ]
