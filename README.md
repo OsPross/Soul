@@ -1,0 +1,179 @@
+# Soul
+
+Cross-platform voice AI desktop assistant (Windows + Linux) built with **Tauri 2**, **React**, **TypeScript**, **Vite**, and **Tailwind**.
+
+Features: **Dynamic Island** top bar, **one-key push-to-talk** (dictation + voice commands, routed automatically), **spoken replies** with selectable voice and personality, **Circle-to-Ask**, and **voice commands** (agent mode).
+
+### Models
+
+| Feature | Default | Transport |
+|---------|---------|-----------|
+| Dictation | `gemini-3.5-transcribe-live` | Live API (WebSocket), SMART transcription |
+| Voice commands + spoken replies | `gemini-3.8-live` | Live API with function calling, native audio out |
+| Circle-to-Ask | `gemini-3.1-flash-lite` | REST `generateContent` |
+| REST fallback | `gemini-3.5-flash-lite` | REST |
+
+With **Use Live API** on (Settings, default), audio streams in 100 ms chunks while you hold the hotkey over a warm session (keepalive, reconnect with backoff, goAway + session resumption); push-to-talk is manual VAD (`activityStart` on press, `activityEnd` on release). If Live fails, the recording goes to REST: `gemini-3.1-flash-lite`, then `gemini-3.5-flash-lite`. A 429 that says *per day* marks that model exhausted until midnight Pacific. Model ids are checked against `GET /v1beta/models` on startup; retired/missing ones are auto-replaced and a notice is shown in Settings. Turn off **Use Live API** to use REST only.
+
+Dictation output stays in the spoken language (Polish by default) and is never translated; fillers and self-corrections are removed.
+
+### Hotkeys (defaults)
+
+Settings → **Talk key → Mode**: **Smart (one key)** (default) or **Separate keys**.
+
+| Action | Smart (default) | Separate keys |
+|--------|-----------------|---------------|
+| Talk: dictation *or* command, routed automatically | hold **Right Ctrl** | — |
+| Force command mode | double-tap and hold the talk key | — |
+| Push-to-talk dictation | (talk key) | `Ctrl+Win+Space` (hold) |
+| Voice commands (agent) | (talk key) | `Win+Alt+Space` (hold) |
+| Circle-to-Ask | talk key + mouse drag, or `Ctrl+Shift+Space` | `Ctrl+Shift+Space` |
+| Stop Soul talking (barge-in) | press the talk key | press either talk hotkey |
+
+**Smart routing:** after you release, the transcript becomes a **command** when it starts with the wake word („Soul, …”, „Hej Soul …”), starts with a command verb (otwórz, zamknij, wyszukaj, znajdź, ścisz, podgłośnij, następna, pauza, przypomnij, pokaż, open, close, search… — up to 12 words), or is a short phrase the pre-router knows („następna piosenka”). Everything else is **dictation** and gets pasted.
+
+The talk key is read with a low-level hook (`WH_KEYBOARD_LL`/`WH_MOUSE_LL` on Windows, XRecord on X11). It can be any single key or mouse button: Ctrl/Shift/Win/Left Alt, Caps Lock, F1–F24, Pause, Insert, Menu, middle or side mouse buttons (record it in Settings). Taps shorter than 200 ms keep the key's normal behaviour (a swallowed side button is replayed) unless you tick *Block the key's normal action on short taps*; pressing another key while holding it (Right Ctrl+C) cancels the talk. The mic starts on press, but nothing is sent to Gemini until the key has been held for 200 ms. **X11:** XRecord can only observe, so side buttons/F-keys also do their normal action and the drag gesture also reaches the app under the cursor. **Wayland:** no global hooks, so Soul falls back to the separate hotkeys.
+
+**Polish AltGr:** on Polish layouts Right Alt (AltGr) is reported as Ctrl+Alt, so `Ctrl+Alt+<letter>` hotkeys would fire while typing ć, ą, ę… Soul therefore (a) ignores hotkey presses while Right Alt is held (Windows, `GetAsyncKeyState(VK_RMENU)`), (b) rejects `Ctrl+Alt+<letter>` in Settings, and (c) migrates old saved `Ctrl+Alt+…` hotkeys to the defaults above. The talk-key hook ignores the fake Left Ctrl that AltGr generates and refuses Right Alt as the talk key.
+
+### Voice replies & personality
+
+Commands and questions are answered out loud with the Live API's native audio (`responseModalities: AUDIO`, 24 kHz PCM played via cpal). Short confirmations („Otwieram Spotify.”) and longer answers are spoken and shown on the Island with a waveform. Press the talk key while Soul speaks to interrupt it. Settings → **Głos i dusza** (Voice & soul): on/off, voice (Charon, Puck, Kore, Fenrir, Aoede, Leda, Orus, Zephyr) with **Preview**, speaking speed (slow/normal/fast, applied through the prompt; native-audio models have no rate setting), and *Only confirm briefly*; personality presets **Neutralny**, **Ziomek**, **Profesjonalny**, **Sarkastyczny**. They change only the tone of spoken replies; dictation stays neutral. **Głośność głosu Soul** (0–100%, only Soul's voice) and *Ściszaj muzykę, gdy Soul mówi* (other apps drop to 30% during a reply). Replies always use the configured language (Polish by default, `speechConfig.languageCode` = `pl-PL`) — never a language picked from the topic.
+
+UI sound effects are synthesized locally with WebAudio (no bundled assets): listen start/end, success, error, notification, timer. Settings → **Wygląd** → *Zestaw dźwięków*: Futurystyczny / Subtelny / Wyłączony, plus volume and preview.
+
+Circle-to-Ask captures the monitor under the cursor (`xcap`), dims it, lets you drag a region (spring selection ring, a small violet spirit guide docks at it), ask by voice/text, and shows a markdown answer card docked beside the selection with a follow-up thread. Wayland screen capture is stubbed (use X11 for now).
+
+### Voice commands — how to test
+
+1. Open Settings, set your Gemini API key, **Save**.
+2. Hold **Right Ctrl** and say „Soul, …” or start with a command verb (or, in *Separate keys* mode, hold **Win+Alt+Space**), then release. Island: Listening… → Thinking… → spoken reply with waveform.
+3. Try these (Polish examples):
+
+| Say | Expected |
+|-----|----------|
+| „otwórz Spotify” | Opens Spotify (Start Menu / `.desktop` fuzzy match) |
+| „wyszukaj na YouTube jak ugotować spaghetti” | Opens YouTube search results |
+| „ścisz do 30 procent” | Sets system volume to 30% |
+| „następna piosenka” | Media next-track key |
+| „weź mi znajdź jak ugotować spaghetti” | Filler stripped → search; questions get a short spoken + Island answer (Gemini + Google Search) and, if enabled, the browser opens |
+| „mów ciszej” / „mów głośniej” / „wycisz się” | Soul's own voice volume −20% / +20% / 0% |
+| „nastaw 10 minut na makaron” | Island countdown, sound + spoken notice when it ends; „anuluj minutnik” |
+| „co gra?” | Says the current track |
+| „Soul, dzień dobry” | Morning briefing: time, date, timers, notes, now playing |
+| „zapamiętaj, że gram na serwerze CityRP” / „zapomnij o serwerze” / „co pamiętasz o grach” | Local memory (SQLite); facts are injected into prompts (max 15) |
+| „zanotuj kupić mleko” | Voice note (Plans tab, Settings → Pamięć) |
+| „stwórz scenę granie: otwórz Discord, FiveM i Spotify, głośność 40%” / „uruchom scenę granie” | Scenes (macros) with per-step chips on the Island |
+
+`close_app` asks for Confirm/Cancel on an Island card (Esc = Cancel). While a command runs, the Island shows animated tool chips (Otwieram, Głośność…). No arbitrary shell — only the registered tools. Watch the console for `[soul][agent] tool_call` / `tool_result` logs.
+
+### Dynamic Island — how to test
+
+The Island is a frameless always-on-top pill at the top of the **primary** monitor (replaces the old floating status overlay when enabled).
+
+1. `npm run tauri dev` → Island appears as a black pill (~236×40) with the spirit + clock.
+2. **Hover 300 ms** → peek strip (transport controls / status). **Click** or **scroll down** → expanded panel (~640×340) with spring morph. **Click the header**, **mouse leave 400 ms**, **Esc**, **blur** or **scroll up** → collapses.
+3. **Now Playing:** start Spotify/Edge media → title/artist/art appear; use Play/Pause/Next/Prev.  
+   - Windows: Global System Media Transport Controls  
+   - Linux: MPRIS over D-Bus (`zbus`)
+4. **Clipboard:** copy ordinary text in another app → item appears; click to re-copy; **Clear** empties history. Paste a fake password (`Sk-abc123XYZ!@#`) → should be skipped.
+5. **Plans:** running timers (live countdown, ✕ to cancel) and the latest voice notes.
+6. **Quick apps:** type `Spotify` → Add → click chip to launch (same fuzzy index as voice commands).
+7. **Quick settings:** drag volume; change mic; toggle quiet mode.
+8. **Assistant state:** hold the talk key (Right Ctrl) → amber *Dyktowanie* stage with live waveform → thinking → success + caption strip with the pasted text. Commands use a sky-blue stage; spoken replies show the spirit speaking with a waveform and the reply text.
+9. **Settings → Wyspa:** disable, change position (left/center/right), toggle tabs → Save.
+10. **Settings → Wygląd:** accent, spirit size, glow, opacity, blur, animation preset (Pełne / Zrównoważone / Minimalne / Wyłączone), per-feature toggles, speed/stiffness, battery saver, FPS cap, quiet mode, result duration, sound effects. Applied live in every window and saved automatically.
+
+**Wayland:** Island falls back to a normal top-anchored always-on-top window. Expect limited transparency/blur, no true click-through outside the pill, and compositor-dependent always-on-top behavior.
+
+### Memory & scenes
+
+- **Settings → Pamięć:** list / search / edit / delete / clear all remembered facts and notes, toggle *Zapamiętuj automatycznie* (facts stated in commands, e.g. „gram na serwerze X”, are saved with a „Zapamiętałem: …” chip and **Cofnij**). Stored in `soul-memory.db` in the app data dir; passwords and keys are refused.
+- **Settings → Sceny:** ordered steps (open app / link, YouTube, search, system volume, media, delay, Do Not Disturb) and trigger phrases („gramy w FiveM”). When the same 2+ apps are opened together by voice 3 times, the Island suggests a scene. Do Not Disturb = Windows toast banners off / GNOME `show-banners` or dunst on Linux.
+
+## Prerequisites
+
+### All platforms
+
+- [Node.js](https://nodejs.org/) 20+
+- [Rust](https://rustup.rs/) (stable)
+- A [Gemini API key](https://aistudio.google.com/apikey)
+
+### Windows
+
+- [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload (MSVC + Windows SDK)
+- [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (preinstalled on Windows 11)
+
+### Linux
+
+System packages vary by distro. On Debian/Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  libwebkit2gtk-4.1-dev \
+  build-essential \
+  curl \
+  wget \
+  file \
+  libxdo-dev \
+  libssl-dev \
+  libayatana-appindicator3-dev \
+  librsvg2-dev \
+  libasound2-dev \
+  pkg-config
+```
+
+Optional paste helpers:
+
+- **X11:** `xdotool` (fallback if `enigo` is flaky)
+- **Wayland:** `wtype` or `ydotool` (without these, Soul copies text to the clipboard and shows a notice)
+
+## Develop
+
+```bash
+npm install
+npm run tauri dev
+```
+
+On first launch the overlay stays hidden. Open **Settings** from the system tray (left-click the tray icon, or tray menu → Settings), paste your Gemini API key, optionally click **Test key**, then **Save**.
+
+Default talk key: **Right Ctrl**. Hold to speak, release to paste or run a command. In *Separate keys* mode dictation is **Ctrl+Win+Space** and commands are **Win+Alt+Space**.
+
+## Build
+
+```bash
+npm run tauri build
+```
+
+Artifacts land under `src-tauri/target/release/` (and the platform bundle folder).
+
+## Architecture
+
+```
+src/                     React UI (island + overlay + settings + ask)
+src-tauri/src/
+  lib.rs                 App setup, tray, hotkeys, dictation / smart routing
+  talk.rs                Smart talk key worker (tap / hold / double-tap / chord / drag)
+  voice.rs               Spoken-reply playback (cpal), barge-in, waveform level
+  island/                Dynamic Island window, media, clipboard
+  agent/                 Voice-command session, tool dispatch, pre-router, smart intent
+  memory.rs              Local SQLite memory (facts, notes, scenes, app launches)
+  scenes.rs              Scenes (macros), runner, suggestions
+  timers.rs              Voice timers / reminders
+  ask.rs                 Circle-to-Ask flow
+  config.rs              Local settings (tauri-plugin-store)
+  audio.rs               Mic capture → 16 kHz mono WAV + streamed PCM chunks (cpal)
+  ai/gemini.rs           REST: dictation fallback, Ask, agent function calling, models list
+  ai/live.rs             Live API sessions (tokio-tungstenite, rustls)
+  ai/cleanup.rs          Dictation cleanup (fillers, self-corrections)
+  platform/              paste, open_app, volume, media, URLs, input hooks (hook.rs + backends)
+```
+
+## Settings
+
+Stored locally in the app data dir as `soul-settings.json` (API key, hotkey, model, language). The API key is never written to logs.
+
+## License
+
+Private / WIP.
