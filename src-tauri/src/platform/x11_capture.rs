@@ -44,7 +44,8 @@ pub fn zpixmap32_to_rgba(data: &[u8], width: u32, height: u32, stride: usize, ls
     let mut out = Vec::with_capacity(w * h * 4);
     for row in 0..h {
         let line = &data[row * stride..row * stride + w * 4];
-        for px in line.chunks_exact(4) {
+        let (pixels, _) = line.as_chunks::<4>();
+        for px in pixels {
             let (r, g, b) = if lsb_first { (px[2], px[1], px[0]) } else { (px[1], px[2], px[3]) };
             out.extend_from_slice(&[r, g, b, 255]);
         }

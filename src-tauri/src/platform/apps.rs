@@ -8,6 +8,8 @@ pub struct AppEntry {
     pub name: String,
     /// Launch target: .lnk/.desktop path, executable, or UWP AppID (`shell:AppsFolder\…`).
     pub target: String,
+    /// Only the Windows launcher branches on it (Linux entries are all `.desktop`).
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub kind: AppKind,
 }
 
@@ -21,9 +23,11 @@ pub struct AppSuggestion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppKind {
+    #[cfg_attr(not(windows), allow(dead_code))]
     Shortcut,
     #[allow(dead_code)] // set on Linux .desktop entries
     Desktop,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Uwp,
 }
 
@@ -164,6 +168,7 @@ fn urlencoding_minimal(s: &str) -> String {
     out
 }
 
+#[cfg(windows)]
 pub fn collect_lnk_names(dir: &Path, out: &mut Vec<AppEntry>) {
     let walk = match std::fs::read_dir(dir) {
         Ok(w) => w,
@@ -198,6 +203,7 @@ pub fn collect_lnk_names(dir: &Path, out: &mut Vec<AppEntry>) {
     }
 }
 
+#[cfg(windows)]
 pub fn windows_start_menu_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(program_data) = std::env::var("ProgramData") {

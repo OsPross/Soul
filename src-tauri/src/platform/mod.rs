@@ -114,9 +114,10 @@ pub fn create_platform() -> Arc<dyn Platform> {
     #[cfg(target_os = "linux")]
     {
         if is_wayland() {
-            return Arc::new(linux_wayland::LinuxWaylandPlatform::new());
+            Arc::new(linux_wayland::LinuxWaylandPlatform::new()) as Arc<dyn Platform>
+        } else {
+            Arc::new(linux_x11::LinuxX11Platform::new())
         }
-        return Arc::new(linux_x11::LinuxX11Platform::new());
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
