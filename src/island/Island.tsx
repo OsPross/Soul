@@ -24,6 +24,7 @@ import {
 import { playCue, type Cue } from "./sounds";
 import { tr } from "../i18n";
 import { hasPendingUpdate, installUpdate, useUpdate, type UpdateStatus } from "../lib/update";
+import { holdsCard, mustCollapseFor, pickStage, type Stage } from "./stage";
 
 /** Transparent window margin around the panel; must match PAD_X / PAD_B in island/mod.rs. */
 const PAD_X = 20;
@@ -118,13 +119,6 @@ interface ToolChip {
 
 type Tab = "now" | "clipboard" | "plans" | "apps" | "settings";
 
-/**
- * Collapsed-mode content. Priority: confirm > live activity > caption > music > idle.
- * `stage` = big live-activity card, `compact` = same info squeezed into the pill (quiet mode
- * or "don't expand" for that feature).
- */
-type Stage = "confirm" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
-
 const SIZE = {
   idle: { w: 236, h: 40, r: 20 },
   music: { w: 340, h: 40, r: 20 },
@@ -181,7 +175,7 @@ function spiritStateOf(b: Banner, music: boolean): SpiritState {
 export default function Island() {
   const anim = useAnim();
   const t = useT();
-  // Cards with buttons (text result, toast with an action) must not turn into peek on hover.
+  // Cards with buttons (confirm, text result, toast with an action) must not turn into peek on hover.
   const holdCard = useRef(false);
   const { mode, collapse, toggle, expand, handlers } = useIslandMode(holdCard);
   const cfg = anim.cfg;
@@ -419,28 +413,24 @@ export default function Island() {
     (kind === "dictation" ? cfg.noise.expandOnDictation : kind === "command" ? cfg.noise.expandOnCommand : true);
   const showCaption = Boolean(caption) && anim.on("caption") && !quiet;
 
-  const stage: Stage =
-    shown.state === "confirm"
-      ? "confirm"
-      : textResult
-        ? "result"
-        : toast?.kind === "timer"
-        ? "toast"
-        : active && !(shown.state === "done" && kind === "dictation" && showCaption)
-          ? expandAllowed
-            ? "stage"
-            : "compact"
-          : toast
-            ? "toast"
-            : updateNotice
-              ? "update"
-              : showCaption
-              ? "caption"
-              : mediaActive
-                ? "music"
-                : "idle";
+  const stage: Stage = pickStage({
+    state: shown.state,
+    kind,
+    textResult: Boolean(textResult),
+    toastKind: toast?.kind ?? null,
+    expandAllowed,
+    showCaption,
+    updateNotice: Boolean(updateNotice),
+    mediaActive,
+  });
   const nextTimer = timers[0] ?? null;
-  holdCard.current = stage === "result" || (stage === "toast" && Boolean(toast?.action));
+  holdCard.current = holdsCard(stage, Boolean(toast?.action));
+
+  // A confirmation has top priority: if the Island is open (peek over the player, expanded),
+  // fold it back onto the card so Potwierdź / Anuluj are visible until answered.
+  useEffect(() => {
+    if (mustCollapseFor(stage, mode)) collapse();
+  }, [stage, mode, collapse]);
 
   // Announce a new version once per version, only while Soul is quiet: never over a recording,
   // a spoken reply, a confirmation, a toast or a dictation caption (it waits for the next idle).
@@ -863,7 +853,8 @@ function Collapsed({
             <div className="truncate text-[12px] text-[var(--soul-muted)]">{banner.message}</div>
           </div>
         </div>
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center justify-end gap-2">
+          <span className="mr-auto truncate text-[11px] text-[var(--soul-muted)]">{t("island.confirmVoice")}</span>
           <Press
             onClick={() => invoke("agent_confirm", { accepted: false }).catch(() => undefined)}
             className="soul-btn-ghost rounded-full px-4 py-1.5 text-[12px]"

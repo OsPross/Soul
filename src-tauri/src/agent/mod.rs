@@ -2,6 +2,7 @@
 //! Replies are spoken through the Live session's native audio (see `voice.rs`).
 
 mod chain;
+pub(crate) mod confirm;
 pub(crate) mod context;
 mod intent;
 mod router;
@@ -20,26 +21,27 @@ use crate::config::load_settings;
 use crate::voice::VoicePlayer;
 use crate::{
     emit_overlay, report_error, resolve_fallback_model, retire_model_and_heal, schedule_hide,
-    AppState, OverlayPayload,
+    AppState,
 };
 use parking_lot::Mutex;
 use serde_json::{json, Value};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 const MAX_AGENT_ROUNDS: u32 = 6;
-const CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
+/// `close_app` hard limit (the backend itself aims for < 4 s).
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Spoken reply: give up when the session is silent this long…
 const VOICE_IDLE: Duration = Duration::from_secs(6);
 /// …or when one reply runs longer than this.
 const VOICE_MAX: Duration = Duration::from_secs(60);
 
 pub struct AgentState {
-    /// When set, overlay Confirm/Cancel should send true/false here.
-    pub pending_confirm: Mutex<Option<Sender<bool>>>,
+    /// A destructive tool waits for Confirm/Cancel (Island buttons, Esc or a spoken answer).
+    pub pending_confirm: Mutex<Option<confirm::Pending>>,
     /// Commands Live turn whose spoken reply is still streaming/playing (barge-in cancels it).
     pub speaking_turn: Mutex<Option<u64>>,
 }
@@ -53,14 +55,7 @@ pub fn new_agent_state() -> AgentState {
 
 #[tauri::command]
 pub fn agent_confirm(app: AppHandle, accepted: bool) -> Result<(), String> {
-    let tx = app.state::<AppState>().agent.pending_confirm.lock().take();
-    match tx {
-        Some(tx) => {
-            let _ = tx.send(accepted);
-            Ok(())
-        }
-        None => Err("No pending confirmation.".into()),
-    }
+    confirm::answer(&app, accepted)
 }
 
 /// Talk key pressed again while Soul is speaking: stop the audio now and drop the rest of the
@@ -230,6 +225,10 @@ pub fn speak_notice(app: &AppHandle, text: &str) {
 pub fn on_agent_pressed(app: &AppHandle) {
     let state = app.state::<AppState>();
     barge_in(app);
+    if confirm::is_pending(app) {
+        confirm::begin_answer(app);
+        return;
+    }
     if *state.busy.lock() {
         return;
     }
@@ -249,6 +248,10 @@ pub fn on_agent_pressed(app: &AppHandle) {
 }
 
 pub fn on_agent_released(app: &AppHandle) {
+    if confirm::is_answering() {
+        confirm::on_answer_released(app);
+        return;
+    }
     let state = app.state::<AppState>();
     if !state.recorder.is_recording() {
         return;
@@ -414,7 +417,7 @@ fn run_chain(
     let mut failed = false;
     for (i, step) in steps.iter().enumerate() {
         match run_route(app, platform, step) {
-            Ok(msg) if step.tool == "close_app" && msg.starts_with("Cancelled") => {
+            Ok(msg) if step.tool == "close_app" && confirm::is_cancelled(&msg) => {
                 done.push((false, format!("Anulowano: {}", step.args["name"].as_str().unwrap_or("zamykanie"))));
                 left += steps.len() - i - 1;
                 break;
@@ -1522,11 +1525,26 @@ fn run_tool(
         }
         "close_app" => {
             let app_name = arg_str(args, "name")?;
-            if !request_confirm(app, &format!("Close {app_name}?"))? {
-                return Ok(format!("Cancelled closing {app_name}"));
+            let lang = crate::i18n::ui_lang(&load_settings(app).unwrap_or_default());
+            let shown = capitalize_first(app_name.trim());
+            if !confirm::request(app, &confirm::close_question(lang, &shown))? {
+                return Ok(confirm::cancelled_message(lang, &shown));
             }
-            let _ = emit_overlay(app, "thinking", Some("Closing…".into()));
-            platform.close_app(&app_name)
+            let _ = emit_overlay(app, "thinking", Some(crate::i18n::tr(lang, "Zamykam…", "Closing…").into()));
+            // Hard limit: a hung snapshot / process must never stall the command.
+            let (tx, rx) = mpsc::channel();
+            let p = Arc::clone(platform);
+            thread::spawn(move || {
+                let _ = tx.send(p.close_app(&app_name));
+            });
+            rx.recv_timeout(CLOSE_TIMEOUT).unwrap_or_else(|_| {
+                eprintln!("[soul][agent] close_app timed out after {} s", CLOSE_TIMEOUT.as_secs());
+                Err(crate::i18n::tr(
+                    lang,
+                    format!("Zamykanie {shown} trwa zbyt długo — spróbuj ponownie."),
+                    format!("Closing {shown} is taking too long — try again."),
+                ))
+            })
         }
         "focus_app" => {
             let app_name = arg_str(args, "name")?;
@@ -1831,35 +1849,12 @@ fn arg_u8(args: &Value, key: &str) -> Result<u8, String> {
     Err(format!("Invalid '{key}' value"))
 }
 
-fn request_confirm(app: &AppHandle, message: &str) -> Result<bool, String> {
-    let (tx, rx): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-    {
-        let state = app.state::<AppState>();
-        *state.agent.pending_confirm.lock() = Some(tx);
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
-    let _ = emit_overlay(app, "confirm", Some(message.to_string()));
-    if let Some(win) = app.get_webview_window("overlay") {
-        let _ = win.set_size(tauri::Size::Physical(tauri::PhysicalSize::new(360, 100)));
-    }
-
-    let accepted = match rx.recv_timeout(CONFIRM_TIMEOUT) {
-        Ok(v) => v,
-        Err(_) => {
-            if let Some(state) = app.try_state::<AppState>() {
-                *state.agent.pending_confirm.lock() = None;
-            }
-            false
-        }
-    };
-
-    let _ = app.emit(
-        "overlay://state",
-        OverlayPayload {
-            state: "thinking".into(),
-            message: None,
-        },
-    );
-    Ok(accepted)
 }
 
 #[cfg(test)]

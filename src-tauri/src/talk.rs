@@ -7,6 +7,7 @@
 //! - release after a hold → transcript → `agent::classify` → paste (dictation) or command;
 //! - double-tap-and-hold → command mode (audio streams straight to the commands session);
 //! - talk key + left-drag → Circle-to-Ask on the dragged region;
+//! - hold while a confirmation card is up → the spoken „tak” / „nie” answers it;
 //! - any press while Soul is speaking → barge-in.
 //!
 //! Nothing here runs on the main thread; hook callbacks only do a channel send.
@@ -234,6 +235,8 @@ pub fn apply(app: &AppHandle, settings: &Settings) -> Result<bool, String> {
 enum Mode {
     Smart,
     Command,
+    /// Answering a pending confirmation (`agent::confirm`) — the card stays up.
+    Confirm,
 }
 
 struct Held {
@@ -363,6 +366,27 @@ impl Worker {
         }
         self.ignore_release = false;
         let state = self.app.state::<AppState>();
+        // A pending confirmation outranks `busy` (the command waiting on it holds it).
+        if agent::confirm::is_pending(&self.app) && !state.recorder.is_recording() {
+            match begin_capture(&self.app, CaptureTarget::Dictation, true) {
+                Ok((gate, notice)) => {
+                    eprintln!("[soul][hook] press mode=Confirm");
+                    self.held = Some(Held {
+                        mode: Mode::Confirm,
+                        down_at: at,
+                        gate,
+                        armed: false,
+                        notice,
+                    });
+                    self.arm_if_due();
+                }
+                Err(e) => {
+                    self.ignore_release = true;
+                    report_error(&self.app, e);
+                }
+            }
+            return;
+        }
         if *state.busy.lock() || ask::is_active(&state.ask) || state.recorder.is_recording() {
             eprintln!("[soul][hook] press ignored (busy / Ask open / recording)");
             self.ignore_release = true;
@@ -375,7 +399,7 @@ impl Worker {
             _ => Mode::Smart,
         };
         let target = match mode {
-            Mode::Smart => CaptureTarget::Dictation,
+            Mode::Smart | Mode::Confirm => CaptureTarget::Dictation,
             Mode::Command => CaptureTarget::Commands,
         };
         match begin_capture(&self.app, target, true) {
@@ -420,6 +444,11 @@ impl Worker {
         let msg = match h.mode {
             Mode::Command => Some("Command mode".to_string()),
             Mode::Smart => h.notice.clone(),
+            Mode::Confirm => {
+                // No "listening" state: the confirm card stays on screen while the answer is spoken.
+                agent::confirm::mark_answering();
+                return;
+            }
         };
         let _ = emit_overlay(&self.app, "listening", msg);
     }
@@ -441,12 +470,16 @@ impl Worker {
         match h.mode {
             Mode::Smart => crate::on_smart_released(&self.app),
             Mode::Command => agent::on_agent_released(&self.app),
+            Mode::Confirm => agent::confirm::on_answer_released(&self.app),
         }
     }
 
     fn cancel(&self, h: Held, why: &str) {
         let t0 = Instant::now();
         cancel_capture(&self.app, &h.gate);
+        if h.mode == Mode::Confirm {
+            agent::confirm::cancel_answer();
+        }
         eprintln!(
             "[soul][hook] cancelled why={why} mode={:?} held_ms={} cancel_ms={}",
             h.mode,

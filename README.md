@@ -87,7 +87,7 @@ Circle-to-Ask captures the monitor under the cursor (`xcap`), dims it, lets you 
 
 **Selected-text actions** read the selection only when you say one of these phrases (never otherwise; the models have no tool for it): Windows simulates Ctrl+C (Ctrl+Insert in terminals) and restores your clipboard right after; X11 reads the PRIMARY selection (clipboard untouched); Wayland is best effort. The text goes to Gemini (Ask model, default `gemini-3.1-flash-lite`, fallback `gemini-3.5-flash-lite`) with formatting and language preserved unless translating; it is never stored in the conversation context or spoken by the Live voice. „Cofnij” switches back to the app and sends its own undo (Ctrl+Z).
 
-`close_app` asks for Confirm/Cancel on an Island card (Esc = Cancel). While a command runs, the Island shows animated tool chips (Otwieram, Głośność…). No arbitrary shell — only the registered tools. Watch the console for `[soul][agent] tool_call` / `tool_result` logs.
+`close_app` asks for Confirm/Cancel on an Island card (Esc = Cancel, or hold the talk key and say „tak” / „nie”); the card stays on top until answered. Apps are matched by their program (Discord.exe, steam.exe), closed gracefully, then their whole process tree is ended (tray apps like Discord/Steam/Spotify are quit, not hidden). While a command runs, the Island shows animated tool chips (Otwieram, Głośność…). No arbitrary shell — only the registered tools. Watch the console for `[soul][agent] tool_call` / `tool_result` logs.
 
 ### Voice regression tests
 

@@ -38,7 +38,7 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   `collect_dictation` waits for the final transcript. `live_smoke.rs` = opt-in real-API test (`SOUL_TEST_KEY`).
 - `ai/cleanup.rs` – dictation cleanup: local filler removal + LLM pass only when a self-correction is detected.
 - `ai/quota.rs` – per-model daily 429 exhaustion tracking until midnight Pacific.
-- `agent/mod.rs` – voice-command session + tool dispatch (`close_app` requires overlay Confirm/Cancel), spoken-reply
+- `agent/mod.rs` – voice-command session + tool dispatch (`close_app` requires Confirm/Cancel, 5 s hard limit), spoken-reply
   draining + barge-in. `local_dispatch` runs before any model, in order: context reset („nowy temat”/„zapomnij”) →
   text action → deterministic follow-up → chain (all parts deterministic) → pre-router. Model calls: up to
   `chain::MAX_ACTIONS` (4) per command, in order, stop at the first failure, every call id answered (later Live
@@ -60,6 +60,10 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   short „?” question (unless `Platform::text_input_focused`) → command, else dictation; `classify_smart` adds text actions,
   context resets and — only while context is alive — follow-ups. Dictation traps (`pulapka_*`) must stay dictation. Scene triggers match fuzzily
   (`scenes::match_trigger`: phonetic tokens + similarity ≥ 0.8).
+  `agent/confirm.rs` – pending confirmation (`request`/`answer`): while pending, `emit_overlay`/`schedule_hide` never replace
+  the card; the talk key (`talk.rs` `Mode::Confirm`, bypasses `busy`) or a separate-mode hotkey records a spoken answer on the
+  dictation session (`parse_answer`: „tak”/„nie”, a negative wins). Island side: `island/stage.ts` (`pickStage`, `holdsCard`;
+  tested by `npm run test:ui`). Rust UI strings: `i18n.rs` (`ui_lang` from `appearance.uiLang`, `tr`).
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
   a changed prompt reconnects it, so call `memory_changed` after edits). Refuses secrets; `extract_fact` = auto-remember.
@@ -98,6 +102,10 @@ consoles, waits on `GetClipboardSequenceNumber`, restores text/image clipboard; 
 `windows.rs` on Windows; on Linux `linux_x11.rs`, or `linux_wayland.rs` when `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE=wayland`.
 Platform-specific code lives only in these files (behind `#[cfg(target_os)]`); everything else must stay portable.
 `platform::clipboard::with_temporary_text` pastes then restores the previous clipboard. `apps.rs` = fuzzy app index.
+`close.rs` = portable `close_app`/`focus_app` target resolution over a process snapshot: known-apps alias map → exe stem /
+product name → window title (last resort), then climb to the app's root process (never a helper); `tree` = kill order.
+Windows: Toolhelp + EnumWindows (UTF-16 titles), quit URL (`steam://exit`) or WM_CLOSE, 3 s grace, then TerminateProcess
+on the tree (tray apps skip WM_CLOSE). X11: /proc + SIGTERM/SIGKILL.
 Input hook: `platform/hook.rs` holds the portable `HookCore` (swallow/replay/mask/chord/drag decisions, unit-tested);
 `windows_hook.rs` (WH_KEYBOARD_LL/WH_MOUSE_LL) and `x11_hook.rs` (XRecord, observe-only) feed it; Wayland returns an error
 and Soul falls back to the separate combos.

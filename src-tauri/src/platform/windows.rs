@@ -1,8 +1,8 @@
 use super::apps::{
-    collect_lnk_names, fuzzy_score, letter_icon_data_url, pick_best, search_suggestions,
+    collect_lnk_names, letter_icon_data_url, pick_best, search_suggestions,
     validate_http_url, windows_start_menu_dirs, AppEntry, AppKind, AppSuggestion,
 };
-use super::{clipboard, Platform};
+use super::{clipboard, close, Platform};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use parking_lot::Mutex;
 use std::os::windows::process::CommandExt;
@@ -107,48 +107,190 @@ impl WindowsPlatform {
         Ok(())
     }
 
-    fn find_process_window(query: &str) -> Result<(u32, String), String> {
-        let script = r#"
-$q = $env:SOUL_QUERY
-Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } |
-  ForEach-Object { "{0}`t{1}`t{2}" -f $_.Id, $_.ProcessName, $_.MainWindowTitle }
-"#;
-        let output = powershell(script)
-            .env("SOUL_QUERY", query)
-            .output()
-            .map_err(|e| format!("Failed to list windows: {e}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "Failed to list windows: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+}
+
+/// Graceful close (WM_CLOSE / the app's own quit) gets this long before the tree is terminated.
+const CLOSE_GRACE: Duration = Duration::from_secs(3);
+
+/// A visible, unowned top-level window.
+struct TopWindow {
+    hwnd: isize,
+    pid: u32,
+    title: String,
+}
+
+fn top_windows() -> Vec<TopWindow> {
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, GW_OWNER,
+    };
+    unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+        let out = &mut *(lp.0 as *mut Vec<TopWindow>);
+        if IsWindowVisible(hwnd).as_bool() && GetWindow(hwnd, GW_OWNER).ok().is_none_or(|o| o.0.is_null()) {
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            let mut buf = [0u16; 512];
+            let n = GetWindowTextW(hwnd, &mut buf).max(0) as usize;
+            out.push(TopWindow {
+                hwnd: hwnd.0 as isize,
+                pid,
+                // Titles come straight from UTF-16 (no console code page → no "?" garbage).
+                title: String::from_utf16_lossy(&buf[..n]),
+            });
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut best: Option<(u32, String, i32)> = None;
-        for line in stdout.lines() {
-            let mut parts = line.splitn(3, '\t');
-            let Some(pid_s) = parts.next() else { continue };
-            let Some(proc_name) = parts.next() else { continue };
-            let title = parts.next().unwrap_or("");
-            let Ok(pid) = pid_s.parse::<u32>() else { continue };
-            let score = fuzzy_score(query, title)
-                .max(fuzzy_score(query, proc_name));
-            if score <= 0 {
-                continue;
-            }
-            let label = if title.is_empty() {
-                proc_name.to_string()
-            } else {
-                format!("{title} ({proc_name})")
+        true.into()
+    }
+    let mut out = Vec::new();
+    // SAFETY: `out` outlives EnumWindows, which calls `cb` synchronously.
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut out as *mut _ as isize));
+    }
+    out
+}
+
+/// Every process (pid, parent, exe name) via a Toolhelp snapshot.
+fn process_list() -> Vec<close::Proc> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    let mut procs = Vec::new();
+    // SAFETY: the entry is a properly sized PROCESSENTRY32W; the snapshot handle is closed.
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return procs;
+        };
+        let mut e = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut ok = Process32FirstW(snap, &mut e).is_ok();
+        while ok {
+            let n = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+            procs.push(close::Proc {
+                pid: e.th32ProcessID,
+                ppid: e.th32ParentProcessID,
+                exe: String::from_utf16_lossy(&e.szExeFile[..n]),
+                ..Default::default()
+            });
+            ok = Process32NextW(snap, &mut e).is_ok();
+        }
+        let _ = CloseHandle(snap);
+    }
+    procs
+}
+
+/// Process list plus window titles and product names (only for processes with a window).
+fn process_snapshot() -> (Vec<close::Proc>, Vec<TopWindow>) {
+    let mut procs = process_list();
+    let windows = top_windows();
+    for p in procs.iter_mut() {
+        let Some(w) = windows.iter().find(|w| w.pid == p.pid && !w.title.trim().is_empty()) else {
+            continue;
+        };
+        p.title = Some(w.title.clone());
+        // Inbox tools report "Microsoft® Windows® Operating System" (localized, sometimes with a
+        // mangled ®) — says nothing about which app it is.
+        p.product = product_name(p.pid).filter(|s| !(s.contains("Microsoft") && s.contains("Windows")));
+    }
+    (procs, windows)
+}
+
+fn process_path(pid: u32) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the buffer and its length are passed together; the handle is closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let res = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let _ = CloseHandle(h);
+        res.ok()?;
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+/// `ProductName` from the exe's version resource („Discord”, „Google Chrome”).
+fn product_name(pid: u32) -> Option<String> {
+    use windows::core::{w, HSTRING};
+    use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+    let path = HSTRING::from(process_path(pid)?);
+    // SAFETY: `data` holds the whole version block; VerQueryValueW returns pointers into it,
+    // read (unaligned) with the length it reports.
+    unsafe {
+        let size = GetFileVersionInfoSizeW(&path, None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(&path, 0, size, data.as_mut_ptr().cast()).ok()?;
+        let mut ptr: *mut core::ffi::c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+        if !VerQueryValueW(data.as_ptr().cast(), w!("\\VarFileInfo\\Translation"), &mut ptr, &mut len).as_bool()
+            || len < 4
+        {
+            return None;
+        }
+        let lang = std::ptr::read_unaligned(ptr as *const u16);
+        let cp = std::ptr::read_unaligned((ptr as *const u16).add(1));
+        let key = HSTRING::from(format!("\\StringFileInfo\\{lang:04x}{cp:04x}\\ProductName"));
+        if !VerQueryValueW(data.as_ptr().cast(), &key, &mut ptr, &mut len).as_bool() || len == 0 {
+            return None;
+        }
+        let chars: Vec<u16> = (0..len as usize)
+            .map(|i| std::ptr::read_unaligned((ptr as *const u16).add(i)))
+            .take_while(|c| *c != 0)
+            .collect();
+        Some(String::from_utf16_lossy(&chars)).filter(|s| !s.trim().is_empty())
+    }
+}
+
+/// Wait until every pid has exited. `false` on timeout or when a process can't be watched.
+fn wait_exit(pids: &[u32], timeout: Duration) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, E_ACCESSDENIED, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    let deadline = Instant::now() + timeout;
+    for pid in pids {
+        // SAFETY: plain handle calls; the handle is closed.
+        unsafe {
+            let h = match OpenProcess(PROCESS_SYNCHRONIZE, false, *pid) {
+                Ok(h) => h,
+                Err(e) if e.code() == E_ACCESSDENIED => return false,
+                Err(_) => continue, // already gone
             };
-            match best {
-                None => best = Some((pid, label, score)),
-                Some((_, _, s)) if score > s => best = Some((pid, label, score)),
-                _ => {}
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u32;
+            let r = WaitForSingleObject(h, left);
+            let _ = CloseHandle(h);
+            if r != WAIT_OBJECT_0 {
+                return false;
             }
         }
-        best.map(|(pid, label, _)| (pid, label))
-            .ok_or_else(|| format!("No running window matched '{query}'."))
+    }
+    true
+}
+
+fn terminate(pid: u32) -> Result<(), String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    // SAFETY: plain handle calls; the handle is closed.
+    unsafe {
+        let h = OpenProcess(PROCESS_TERMINATE, false, pid).map_err(|e| e.message())?;
+        let res = TerminateProcess(h, 1);
+        let _ = CloseHandle(h);
+        res.map_err(|e| e.message())
+    }
+}
+
+fn post_close(hwnd: isize) {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    // SAFETY: user32 validates the handle.
+    unsafe {
+        let _ = PostMessageW(HWND(hwnd as *mut core::ffi::c_void), WM_CLOSE, WPARAM(0), LPARAM(0));
     }
 }
 
@@ -478,43 +620,91 @@ impl Platform for WindowsPlatform {
     }
 
     fn close_app(&self, name: &str) -> Result<String, String> {
-        let (pid, label) = Self::find_process_window(name)?;
-        let status = hidden_command("taskkill")
-            .args(["/PID", &pid.to_string(), "/T"])
-            .status()
-            .map_err(|e| format!("Failed to close '{label}': {e}"))?;
-        if status.success() {
-            Ok(format!("Closed {label}"))
+        let t0 = Instant::now();
+        let (procs, windows) = process_snapshot();
+        let target = close::resolve(name, &procs, std::process::id())?;
+        let label = target.label.clone();
+        let tree = close::tree(&procs, &target.roots);
+        eprintln!(
+            "[soul][platform] close_app target={label} exe={} roots={:?} tree={} tray={} snapshot_ms={}",
+            target.exe,
+            target.roots,
+            tree.len(),
+            target.tray,
+            t0.elapsed().as_millis()
+        );
+
+        // 1. Graceful: the app's own quit, or WM_CLOSE to its windows (tray apps would only hide).
+        let graceful = if let Some(url) = target.quit_url {
+            shell_open(url).is_ok() && wait_exit(&target.roots, CLOSE_GRACE)
+        } else if !target.tray {
+            let mut sent = 0;
+            for w in windows.iter().filter(|w| tree.contains(&w.pid)) {
+                post_close(w.hwnd);
+                sent += 1;
+            }
+            sent > 0 && wait_exit(&target.roots, CLOSE_GRACE)
         } else {
-            Err(format!("Failed to close '{label}'."))
+            false
+        };
+
+        // 2. Terminate what is left of the tree (everything, or helpers that outlived the quit).
+        // Only processes from the first snapshot (same pid + exe) or spawned since then — a pid
+        // reused by an unrelated process is never touched.
+        let before: Vec<(u32, String)> = procs.iter().map(|p| (p.pid, p.exe.clone())).collect();
+        let now = process_list();
+        let mut killed = 0;
+        let mut failed: Vec<String> = Vec::new();
+        for pid in close::tree(&now, &target.roots) {
+            let Some(p) = now.iter().find(|p| p.pid == pid) else { continue };
+            let known = before.iter().find(|(b, _)| *b == pid);
+            if known.is_some_and(|(_, exe)| *exe != p.exe) {
+                continue;
+            }
+            match terminate(pid) {
+                Ok(()) => killed += 1,
+                Err(e) => failed.push(format!("{} ({e})", p.exe)),
+            }
+        }
+        let gone = wait_exit(&target.roots, Duration::from_millis(700));
+        eprintln!(
+            "[soul][platform] close_app done target={label} graceful={graceful} killed={killed} failed={} gone={gone} ms={}",
+            failed.len(),
+            t0.elapsed().as_millis()
+        );
+        if gone {
+            Ok(format!("Closed {label}"))
+        } else if failed.is_empty() {
+            Err(format!("{label} nie chce się zamknąć."))
+        } else {
+            Err(format!(
+                "Nie udało się zamknąć {label} — brak uprawnień? ({})",
+                failed.join(", ")
+            ))
         }
     }
 
     fn focus_app(&self, name: &str) -> Result<String, String> {
-        let (pid, label) = Self::find_process_window(name)?;
-        let script = format!(
-            r#"
-$p = Get-Process -Id {pid} -ErrorAction Stop
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class SoulWin {{
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-}}
-"@
-[void][SoulWin]::ShowWindowAsync($p.MainWindowHandle, 9)
-[void][SoulWin]::SetForegroundWindow($p.MainWindowHandle)
-"#
-        );
-        let status = powershell(&script)
-            .status()
-            .map_err(|e| format!("Failed to focus '{label}': {e}"))?;
-        if status.success() {
-            Ok(format!("Focused {label}"))
-        } else {
-            Err(format!("Failed to focus '{label}'."))
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SetForegroundWindow, ShowWindowAsync, SW_RESTORE};
+        let (procs, windows) = process_snapshot();
+        let target = close::resolve(name, &procs, std::process::id())?;
+        let tree = close::tree(&procs, &target.roots);
+        // The root's own window first, then any window of its tree with a title.
+        let w = windows
+            .iter()
+            .filter(|w| tree.contains(&w.pid) && !w.title.trim().is_empty())
+            .min_by_key(|w| !target.roots.contains(&w.pid))
+            .ok_or_else(|| format!("{} nie ma otwartego okna.", target.label))?;
+        let hwnd = HWND(w.hwnd as *mut core::ffi::c_void);
+        // SAFETY: user32 validates the handle.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindowAsync(hwnd, SW_RESTORE);
+            }
+            let _ = SetForegroundWindow(hwnd);
         }
+        Ok(format!("Focused {}", target.label))
     }
 
     fn open_url(&self, url: &str) -> Result<String, String> {
@@ -660,6 +850,55 @@ fn build_windows_app_index() -> Vec<AppEntry> {
     apps
 }
 
+/// Opt-in: resolve a few names against the real process list (closes nothing).
+///   cargo test --manifest-path src-tauri/Cargo.toml --lib close_resolve_probe -- --ignored --nocapture
+#[cfg(test)]
+#[test]
+#[ignore]
+fn close_resolve_probe() {
+    let t0 = Instant::now();
+    let (procs, windows) = process_snapshot();
+    eprintln!("snapshot: {} processes, {} windows in {} ms", procs.len(), windows.len(), t0.elapsed().as_millis());
+    for name in ["discord", "steam", "spotify", "fivem", "chrome", "code", "explorer"] {
+        match close::resolve(name, &procs, std::process::id()) {
+            Ok(t) => {
+                let titles: Vec<&str> = procs
+                    .iter()
+                    .filter(|p| t.roots.contains(&p.pid))
+                    .filter_map(|p| p.title.as_deref())
+                    .collect();
+                eprintln!("{name:>10} → {} {:?} exe={} tree={} titles={titles:?}", t.label, t.roots, t.exe, close::tree(&procs, &t.roots).len());
+            }
+            Err(e) => eprintln!("{name:>10} → {e}"),
+        }
+    }
+}
+
+/// Opt-in: open Character Map, then close it through `close_app` (graceful WM_CLOSE path).
+///   cargo test --manifest-path src-tauri/Cargo.toml --lib close_app_probe -- --ignored --nocapture
+#[cfg(test)]
+#[test]
+#[ignore]
+fn close_app_probe() {
+    shell_open(r"C:\Windows\System32\charmap.exe").unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    let t0 = Instant::now();
+    let result = WindowsPlatform::new().close_app("charmap");
+    eprintln!("close_app → {result:?} in {} ms", t0.elapsed().as_millis());
+    assert_eq!(result.as_deref(), Ok("Closed Charmap"));
+    assert!(t0.elapsed() < Duration::from_secs(4));
+
+    // No window → no graceful path: the tree is terminated.
+    let mut child = hidden_command("ping").args(["-n", "30", "127.0.0.1"]).spawn().unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let t0 = Instant::now();
+    let result = WindowsPlatform::new().close_app("ping");
+    eprintln!("close_app → {result:?} in {} ms", t0.elapsed().as_millis());
+    assert!(result.is_ok());
+    assert!(child.wait().is_ok());
+    assert!(t0.elapsed() < Duration::from_secs(4));
+}
+
 /// Opt-in check that Soul's spawns never show a console window (the "włącz Spotify" flash).
 ///   cargo test --manifest-path src-tauri/Cargo.toml --release --lib console_probe -- --ignored --nocapture --test-threads=1
 /// The test detaches from its console first (`FreeConsole`), like the GUI-subsystem release app —
@@ -748,10 +987,10 @@ mod console_probe {
             })
             .unwrap();
         });
-        total += new_consoles_during("focus_app (powershell + Add-Type)", 300, || {
+        total += new_consoles_during("focus_app (native)", 300, || {
             let _ = p.focus_app("charmap");
         });
-        total += new_consoles_during("close_app (powershell + taskkill)", 500, || {
+        total += new_consoles_during("close_app (native)", 500, || {
             p.close_app("charmap").unwrap();
         });
         total += new_consoles_during("open_app UWP path (Calculator)", 2000, || {

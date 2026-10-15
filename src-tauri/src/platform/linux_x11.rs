@@ -5,7 +5,7 @@ use super::apps::{
     collect_desktop_apps, letter_icon_data_url, pick_best, search_suggestions, validate_http_url,
     AppEntry, AppSuggestion,
 };
-use super::{clipboard, Platform};
+use super::{clipboard, close, Platform};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use parking_lot::Mutex;
 use std::process::Command;
@@ -217,36 +217,24 @@ impl Platform for LinuxX11Platform {
     }
 
     fn close_app(&self, name: &str) -> Result<String, String> {
-        // Prefer wmctrl close-by-title; fall back to pkill -x on matched desktop binary.
-        if Command::new("wmctrl")
-            .args(["-c", name])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-        {
-            return Ok(format!("Closed {name}"));
-        }
-        let apps = self.indexed_apps();
-        if let Some(entry) = pick_best(name, &apps) {
-            let bin = entry
-                .target
-                .split_whitespace()
-                .next()
-                .unwrap_or(name)
-                .rsplit('/')
-                .next()
-                .unwrap_or(name);
-            let status = Command::new("pkill")
-                .args(["-x", bin])
-                .status()
-                .map_err(|e| format!("Failed to close '{name}': {e}"))?;
-            if status.success() {
-                return Ok(format!("Closed {}", entry.name));
+        // Resolve by executable over /proc (root process of the app), SIGTERM the tree,
+        // SIGKILL what is left after the grace period.
+        let procs = proc_list();
+        match close::resolve(name, &procs, std::process::id()) {
+            Ok(target) => close_target(&procs, &target),
+            Err(e) => {
+                // Last resort: a window title match through wmctrl.
+                if Command::new("wmctrl")
+                    .args(["-c", name])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+                {
+                    return Ok(format!("Closed {name}"));
+                }
+                Err(e)
             }
         }
-        Err(format!(
-            "Could not close '{name}'. Install wmctrl or ensure the app is running."
-        ))
     }
 
     fn focus_app(&self, name: &str) -> Result<String, String> {
@@ -592,5 +580,92 @@ Sink Input #63
     fn empty_or_garbage_output_yields_nothing() {
         assert!(parse_sink_inputs("").is_empty());
         assert!(parse_sink_inputs("Connection failure: Connection refused\n").is_empty());
+    }
+}
+
+/// Every process from /proc: pid, parent, executable name (`exe` link, else `comm`).
+fn proc_list() -> Vec<close::Proc> {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter_map(|pid| {
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            // "pid (comm) state ppid …" — comm may contain spaces and parens.
+            let open = stat.find('(')?;
+            let end = stat.rfind(')')?;
+            let comm = stat.get(open + 1..end)?.to_string();
+            let ppid = stat.get(end + 1..)?.split_whitespace().nth(1)?.parse().ok()?;
+            let exe = std::fs::read_link(format!("/proc/{pid}/exe"))
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or(comm);
+            Some(close::Proc {
+                pid,
+                ppid,
+                exe,
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+fn alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+fn wait_gone(pids: &[u32], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if pids.iter().all(|p| !alive(*p)) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    pids.iter().all(|p| !alive(*p))
+}
+
+fn signal(pids: &[u32], sig: i32) {
+    for pid in pids {
+        // SAFETY: kill(2) with a pid from /proc; a stale pid just returns ESRCH.
+        unsafe {
+            libc::kill(*pid as libc::pid_t, sig);
+        }
+    }
+}
+
+fn close_target(procs: &[close::Proc], target: &close::CloseTarget) -> Result<String, String> {
+    let t0 = Instant::now();
+    let label = &target.label;
+    let tree = close::tree(procs, &target.roots);
+    eprintln!(
+        "[soul][platform] close_app target={label} exe={} roots={:?} tree={}",
+        target.exe,
+        target.roots,
+        tree.len()
+    );
+    let graceful = match target.quit_url {
+        Some(url) => {
+            let _ = Command::new("xdg-open").arg(url).status();
+            wait_gone(&target.roots, Duration::from_secs(3))
+        }
+        None => {
+            signal(&tree, libc::SIGTERM);
+            wait_gone(&target.roots, Duration::from_secs(3))
+        }
+    };
+    let left: Vec<u32> = close::tree(&proc_list(), &target.roots);
+    signal(&left, libc::SIGKILL);
+    let gone = wait_gone(&target.roots, Duration::from_millis(700));
+    eprintln!(
+        "[soul][platform] close_app done target={label} graceful={graceful} killed={} gone={gone} ms={}",
+        left.len(),
+        t0.elapsed().as_millis()
+    );
+    if gone {
+        Ok(format!("Closed {label}"))
+    } else {
+        Err(format!("Nie udało się zamknąć {label} — brak uprawnień?"))
     }
 }

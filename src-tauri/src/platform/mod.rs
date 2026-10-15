@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 pub mod apps;
+pub mod close;
 pub mod hook;
 
 #[cfg(target_os = "linux")]

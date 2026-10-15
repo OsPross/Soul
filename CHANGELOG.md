@@ -19,6 +19,18 @@ changelog shown in Settings → O aplikacji / About.
   luźniejsze”, „rozwiń to” replace the selection (with „Cofnij” for 10 s); „streść to” and
   „wyjaśnij to” show the result on the Island with „Kopiuj” / „Wklej”. Your clipboard is restored.
 - Relative system volume: „ścisz o 20”, „podgłośnij o 10”.
+- Answer „Na pewno?” by voice: hold the talk key (or the dictation / command hotkey) and say
+  „tak” / „potwierdź” or „nie” / „anuluj”.
+
+### Fixed
+
+- Closing apps („zamknij Discord”, „zamknij Steam”) works and takes under 4 s: Soul finds the app
+  by its program (Discord.exe, steam.exe, Spotify.exe…), never a helper process like
+  steamwebhelper, closes it gracefully and then ends the whole process tree. Apps that hide to the
+  tray (Discord, Steam, Spotify) are really quit; Steam uses its own exit. A 5 s limit shows a clear
+  error on the Island.
+- The „Na pewno?” card no longer turns into the music view on hover: it stays on top until you
+  answer or it times out. The question follows the UI language („Zamknąć Discord?”).
 
 ## [0.2.1] - 2026-10-15
 

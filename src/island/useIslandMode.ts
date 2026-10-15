@@ -17,7 +17,8 @@ const WHEEL_LOCK_MS = 350;
  * All transitions go through `go`, which reads/writes `modeRef`, so timers never
  * see stale state. If the mode is open while the pointer is not over the panel,
  * a leave timer is always armed (so a missed `pointerleave` can't leave it stuck).
- * While `hold.current` is true (a card with buttons is shown) hovering does not peek.
+ * While `hold.current` is true (a card with buttons is shown) hovering does not peek and the
+ * wheel does not expand.
  */
 export function useIslandMode(hold?: MutableRefObject<boolean>) {
   const [mode, setMode] = useState<IslandMode>("collapsed");
@@ -86,10 +87,10 @@ export function useIslandMode(hold?: MutableRefObject<boolean>) {
   const onWheel = useCallback(
     (e: { deltaY: number }) => {
       if (Date.now() < wheelLockUntil.current) return;
-      if (e.deltaY > 8 && modeRef.current !== "expanded") go("expanded");
+      if (e.deltaY > 8 && modeRef.current !== "expanded" && !hold?.current) go("expanded");
       else if (e.deltaY < -8 && modeRef.current !== "collapsed") go("collapsed");
     },
-    [go],
+    [go, hold],
   );
 
   // Esc and window blur collapse immediately.

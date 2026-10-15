@@ -51,6 +51,9 @@ jobs:
       - name: Frontend typecheck + build
         run: npm run build
 
+      - name: Island UI unit tests
+        run: npm run test:ui
+
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 

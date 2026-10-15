@@ -4,6 +4,7 @@ mod ask;
 mod audio;
 mod capture;
 mod config;
+mod i18n;
 mod dev_samples;
 mod island;
 mod memory;
@@ -932,6 +933,10 @@ pub(crate) fn emit_overlay(
     state: &str,
     message: Option<String>,
 ) -> Result<(), String> {
+    if agent::confirm::blocks_overlay(app, state) {
+        // A pending confirmation keeps the card until it is answered or times out.
+        return Ok(());
+    }
     OVERLAY_GEN.fetch_add(1, Ordering::SeqCst);
     let settings = load_settings(app).unwrap_or_default();
     if settings.island_enabled {
@@ -995,6 +1000,10 @@ pub(crate) fn live_enabled_for(settings: &Settings, model: &str) -> bool {
 fn on_ptt_pressed(app: &AppHandle) {
     let state = app.state::<AppState>();
     agent::barge_in(app);
+    if agent::confirm::is_pending(app) {
+        agent::confirm::begin_answer(app);
+        return;
+    }
     if *state.busy.lock() {
         return;
     }
@@ -1010,6 +1019,10 @@ fn on_ptt_pressed(app: &AppHandle) {
 }
 
 fn on_ptt_released(app: &AppHandle) {
+    if agent::confirm::is_answering() {
+        agent::confirm::on_answer_released(app);
+        return;
+    }
     let state = app.state::<AppState>();
     if !state.recorder.is_recording() {
         return;
@@ -1090,7 +1103,7 @@ fn run_dictation(
 }
 
 /// Live transcript, or the REST transcript of the WAV when Live is off / failed.
-fn transcribe_turn(
+pub(crate) fn transcribe_turn(
     app: &AppHandle,
     settings: &Settings,
     live_events: Option<std::sync::mpsc::Receiver<ai::live::LiveEvent>>,
@@ -1297,8 +1310,8 @@ pub(crate) fn schedule_hide(app: &AppHandle, delay_ms: u64) {
     let shown = OVERLAY_GEN.load(Ordering::SeqCst);
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_millis(delay_ms));
-        if OVERLAY_GEN.load(Ordering::SeqCst) != shown {
-            // Something newer is on screen (next turn, spoken reply) — leave it.
+        if OVERLAY_GEN.load(Ordering::SeqCst) != shown || agent::confirm::is_pending(&app) {
+            // Something newer is on screen (next turn, spoken reply, a confirmation) — leave it.
             return;
         }
         let settings = load_settings(&app).unwrap_or_default();
