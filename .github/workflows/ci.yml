@@ -58,7 +58,7 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 
       - name: Router + intent unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib agent::
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib 'agent::'
 
       - name: All unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
