@@ -77,6 +77,50 @@ impl LinuxWaylandPlatform {
 }
 
 impl Platform for LinuxWaylandPlatform {
+    fn get_volume(&self) -> Result<u8, String> {
+        super::linux_x11::read_volume()
+    }
+
+    fn read_selection(&self) -> Result<Option<String>, String> {
+        use arboard::{GetExtLinux, LinuxClipboardKind};
+        // Best effort: works where the compositor exposes the primary selection (or via XWayland).
+        let mut cb =
+            arboard::Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?;
+        match cb.get().clipboard(LinuxClipboardKind::Primary).text() {
+            Ok(t) => Ok(Some(t).filter(|t| !t.trim().is_empty())),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(e) => Err(format!(
+                "Zaznaczony tekst nie jest dostępny na Wayland ({e}). Skopiuj go lub użyj sesji X11."
+            )),
+        }
+    }
+
+    fn active_window(&self) -> Option<u64> {
+        None // no portable foreground-window API on Wayland
+    }
+
+    fn activate_window(&self, _id: u64) -> Result<(), String> {
+        Err("Window focus is not available on Wayland.".into())
+    }
+
+    fn send_undo(&self) -> Result<(), String> {
+        let ok = Command::new("wtype")
+            .args(["-M", "ctrl", "-k", "z", "-m", "ctrl"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+            || Command::new("ydotool")
+                .args(["key", "29:1", "44:1", "44:0", "29:0"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        if ok {
+            Ok(())
+        } else {
+            Err("Undo needs wtype or ydotool on Wayland.".into())
+        }
+    }
+
     fn power_state(&self) -> super::PowerState {
         // Fullscreen detection is not available to clients on Wayland.
         super::PowerState {

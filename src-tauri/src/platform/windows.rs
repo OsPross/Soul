@@ -72,19 +72,7 @@ impl WindowsPlatform {
     }
 
     fn paste_via_ctrl_v() -> Result<(), String> {
-        let mut enigo = Enigo::new(&Settings::default())
-            .map_err(|e| format!("Failed to init input simulation: {e}"))?;
-
-        enigo
-            .key(Key::Control, Direction::Press)
-            .map_err(|e| format!("Paste failed (Ctrl press): {e}"))?;
-        enigo
-            .key(Key::Unicode('v'), Direction::Click)
-            .map_err(|e| format!("Paste failed (V): {e}"))?;
-        enigo
-            .key(Key::Control, Direction::Release)
-            .map_err(|e| format!("Paste failed (Ctrl release): {e}"))?;
-        Ok(())
+        ctrl_chord(Key::Unicode('v'), "Paste")
     }
 
     fn indexed_apps(&self) -> Vec<AppEntry> {
@@ -162,6 +150,33 @@ Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle }
         best.map(|(pid, label, _)| (pid, label))
             .ok_or_else(|| format!("No running window matched '{query}'."))
     }
+}
+
+/// Ctrl + `key` through SendInput (enigo).
+fn ctrl_chord(key: Key, what: &str) -> Result<(), String> {
+    let mut enigo = Enigo::new(&Settings::default())
+        .map_err(|e| format!("Failed to init input simulation: {e}"))?;
+    enigo
+        .key(Key::Control, Direction::Press)
+        .map_err(|e| format!("{what} failed (Ctrl press): {e}"))?;
+    let pressed = enigo.key(key, Direction::Click);
+    // Always release Ctrl, even when the key failed.
+    let released = enigo.key(Key::Control, Direction::Release);
+    pressed.map_err(|e| format!("{what} failed (key): {e}"))?;
+    released.map_err(|e| format!("{what} failed (Ctrl release): {e}"))
+}
+
+/// Terminals treat Ctrl+C as an interrupt — copy with Ctrl+Insert there instead.
+fn foreground_is_console() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetForegroundWindow};
+    let mut buf = [0u16; 128];
+    // SAFETY: plain Win32 calls; `buf` outlives the call.
+    let len = unsafe { GetClassNameW(GetForegroundWindow(), &mut buf) };
+    let class = String::from_utf16_lossy(&buf[..len.max(0) as usize]);
+    matches!(
+        class.as_str(),
+        "ConsoleWindowClass" | "CASCADIA_HOSTING_WINDOW_CLASS" | "mintty" | "VirtualConsoleClass"
+    )
 }
 
 /// Audio sessions Soul ducked: (session instance id, original level).
@@ -344,6 +359,95 @@ impl Platform for WindowsPlatform {
 
     fn paste_text(&self, text: &str) -> Result<(), String> {
         clipboard::with_temporary_text(text, Self::paste_via_ctrl_v)
+    }
+
+    fn read_selection(&self) -> Result<Option<String>, String> {
+        use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+        let mut cb =
+            arboard::Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?;
+        let saved = clipboard::save(&mut cb);
+        // SAFETY: no arguments; reads a counter.
+        let before = unsafe { GetClipboardSequenceNumber() };
+        let key = if foreground_is_console() { Key::Insert } else { Key::Unicode('c') };
+        ctrl_chord(key, "Copy")?;
+        // An app with nothing selected leaves the clipboard alone.
+        let t0 = Instant::now();
+        let mut changed = false;
+        while t0.elapsed() < Duration::from_millis(600) {
+            std::thread::sleep(Duration::from_millis(20));
+            // SAFETY: as above.
+            if unsafe { GetClipboardSequenceNumber() } != before {
+                changed = true;
+                break;
+            }
+        }
+        if !changed {
+            return Ok(None);
+        }
+        // The app may still be adding formats; the clipboard can be briefly locked.
+        std::thread::sleep(Duration::from_millis(40));
+        let mut text = None;
+        for _ in 0..5 {
+            match cb.get_text() {
+                Ok(t) => {
+                    text = Some(t);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(30)),
+            }
+        }
+        clipboard::restore(&mut cb, saved);
+        Ok(text.filter(|t| !t.trim().is_empty()))
+    }
+
+    fn active_window(&self) -> Option<u64> {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        // SAFETY: no arguments.
+        let hwnd = unsafe { GetForegroundWindow() };
+        (!hwnd.0.is_null()).then_some(hwnd.0 as usize as u64)
+    }
+
+    fn activate_window(&self, id: u64) -> Result<(), String> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{IsWindow, SetForegroundWindow};
+        let hwnd = HWND(id as usize as *mut core::ffi::c_void);
+        // SAFETY: the handle is only passed to user32, which validates it.
+        unsafe {
+            if !IsWindow(hwnd).as_bool() {
+                return Err("The window is gone.".into());
+            }
+            if SetForegroundWindow(hwnd).as_bool() {
+                Ok(())
+            } else {
+                Err("Could not bring the window back to the front.".into())
+            }
+        }
+    }
+
+    fn send_undo(&self) -> Result<(), String> {
+        ctrl_chord(Key::Unicode('z'), "Undo")
+    }
+
+    fn get_volume(&self) -> Result<u8, String> {
+        use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
+        use windows::Win32::Media::Audio::{eMultimedia, eRender, IMMDeviceEnumerator, MMDeviceEnumerator};
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+        // SAFETY: COM calls on this worker thread; interfaces are released on drop.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("Audio devices unavailable: {e}"))?;
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eMultimedia)
+                .map_err(|e| format!("No default output: {e}"))?;
+            let volume: IAudioEndpointVolume = device
+                .Activate(CLSCTX_ALL, None)
+                .map_err(|e| format!("Volume unavailable: {e}"))?;
+            let level = volume
+                .GetMasterVolumeLevelScalar()
+                .map_err(|e| format!("Volume unavailable: {e}"))?;
+            Ok((level * 100.0).round().clamp(0.0, 100.0) as u8)
+        }
     }
 
     fn capture_screen(&self) -> Result<Vec<u8>, String> {

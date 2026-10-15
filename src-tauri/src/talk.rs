@@ -63,6 +63,8 @@ pub struct LiveGate {
     live: Arc<LivePool>,
     target: CaptureTarget,
     setup: Option<LiveSetup>,
+    /// Commands only: conversation `[CONTEXT]` sent ahead of the audio (follow-ups).
+    preamble: Option<String>,
     state: Mutex<GateState>,
 }
 
@@ -92,7 +94,7 @@ impl LiveGate {
         if let GateState::Buffering(buf) = std::mem::replace(&mut *state, GateState::Streaming) {
             let session = self.session();
             session.configure(setup);
-            session.begin_turn();
+            session.begin_turn_with_context(self.preamble.clone());
             let chunks = buf.len();
             for pcm in buf {
                 session.push_audio(pcm);
@@ -141,10 +143,15 @@ pub fn begin_capture(
         CaptureTarget::Commands => crate::ai::live::commands_setup(&settings),
     });
     let streaming = setup.is_some();
+    let preamble = match target {
+        CaptureTarget::Commands => crate::agent::context_block(&settings),
+        CaptureTarget::Dictation => None,
+    };
     let gate = Arc::new(LiveGate {
         live: Arc::clone(&state.live),
         target,
         setup,
+        preamble,
         state: Mutex::new(GateState::Buffering(Vec::new())),
     });
     if let Some(setup) = &gate.setup {

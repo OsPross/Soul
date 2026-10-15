@@ -44,6 +44,10 @@ export interface SettingsData {
   duckMusic?: boolean;
   searchOpenBrowser?: boolean;
   autoRemember?: boolean;
+  /** Follow-ups: remember the last 3 command exchanges. */
+  contextEnabled?: boolean;
+  /** Forget the conversation context after this many seconds without a command (15–600). */
+  contextTimeoutSecs?: number;
 }
 
 export interface MemoryFact {
@@ -139,6 +143,8 @@ export const TALK_DEFAULTS = {
   duckMusic: false,
   searchOpenBrowser: true,
   autoRemember: true,
+  contextEnabled: true,
+  contextTimeoutSecs: 90,
 };
 
 export const DEFAULT_PRIMARY = "gemini-3.1-flash-lite";
@@ -208,6 +214,8 @@ export function withDefaults(s: SettingsData): SettingsData {
     duckMusic: s.duckMusic ?? TALK_DEFAULTS.duckMusic,
     searchOpenBrowser: s.searchOpenBrowser ?? TALK_DEFAULTS.searchOpenBrowser,
     autoRemember: s.autoRemember ?? TALK_DEFAULTS.autoRemember,
+    contextEnabled: s.contextEnabled ?? TALK_DEFAULTS.contextEnabled,
+    contextTimeoutSecs: s.contextTimeoutSecs ?? TALK_DEFAULTS.contextTimeoutSecs,
   };
 }
 

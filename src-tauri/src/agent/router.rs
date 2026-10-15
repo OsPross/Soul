@@ -190,12 +190,62 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
         return pr("media_control", json!({ "action": action }), format!("media:{action}"));
     }
 
-    // Volume (needs a 0–100 number)
+    // Volume (needs a 0–100 number); „ścisz o 20” / „podgłośnij o 10” are relative.
     if let Some(percent) = match_volume(lower) {
+        if percent > 0 {
+            if let Some(delta) = relative_volume(lower) {
+                return pr("set_volume", json!({ "delta": delta }), format!("volume:{delta:+}"));
+            }
+        }
         return pr("set_volume", json!({ "percent": percent }), format!("volume:{percent}"));
     }
 
     None
+}
+
+/// „ścisz o 20” → -20, „podgłośnij o 10 procent” → +10 (needs „o N” / "by N").
+fn relative_volume(lower: &str) -> Option<i64> {
+    let dir = if contains_any(lower, &["scisz", "sciszy", "przycisz", "ciszej", "quieter", "lower"]) {
+        -1
+    } else if contains_any(lower, &["podglos", "glosniej", "louder", "raise", "turn up"]) {
+        1
+    } else {
+        return None;
+    };
+    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    tokens
+        .windows(2)
+        .find(|p| p[0] == "o" || p[0] == "by")
+        .and_then(|p| p[1].trim_end_matches(['%', '.', ',', '!']).parse::<i64>().ok())
+        .filter(|n| (1..=100).contains(n))
+        .map(|n| dir * n)
+}
+
+/// „otwórz Discord”, „zamknij Spotify”, „przełącz na Chrome” → open/close/focus_app. Used only
+/// for the parts of a chained command — a single „otwórz X” still goes to the model, which is
+/// better at odd app names.
+pub(super) fn match_app_verb(text: &str) -> Option<PreRoute> {
+    let all_words: Vec<&str> = text.split_whitespace().collect();
+    let all_folded: Vec<String> = all_words.iter().map(|w| fold_word(w)).collect();
+    let (skip, _) = strip_filler(&all_folded);
+    let (words, folded) = (&all_words[skip..], &all_folded[skip..]);
+    let tool = match folded.first()?.as_str() {
+        "otworz" | "odpal" | "uruchom" | "wlacz" | "open" | "launch" | "start" => "open_app",
+        "zamknij" | "close" | "quit" | "wylacz" => "close_app",
+        "przelacz" | "przejdz" | "focus" | "switch" => "focus_app",
+        _ => return None,
+    };
+    let name = tail_after(
+        words,
+        folded,
+        1,
+        &["na", "do", "to", "mi", "aplikacje", "aplikacja", "program", "app", "the"],
+    );
+    let n = name.split_whitespace().count();
+    if n == 0 || n > 4 {
+        return None;
+    }
+    pr(tool, json!({ "name": name }), format!("app-verb:{tool}"))
 }
 
 /// Words that may sit inside a now-playing question: „co (teraz) (mi) leci”.
@@ -1007,6 +1057,27 @@ mod tests {
         assert_eq!(match_command("co gra?").unwrap().tool, "now_playing");
         assert_eq!(match_command("Dzień dobry!").unwrap().tool, "morning_briefing");
         assert!(match_command("Dzień dobry, piszę w sprawie faktury za październik").is_none());
+    }
+
+    #[test]
+    fn relative_volume() {
+        let r = match_command("ścisz o 20").unwrap();
+        assert_eq!((r.tool.as_str(), &r.args), ("set_volume", &json!({ "delta": -20 })));
+        assert_eq!(match_command("podgłośnij o 10 procent").unwrap().args, json!({ "delta": 10 }));
+        // „do N” and plain numbers stay absolute.
+        assert_eq!(match_command("ścisz do 20").unwrap().args, json!({ "percent": 20 }));
+        assert_eq!(match_command("głośność 30 procent").unwrap().args, json!({ "percent": 30 }));
+    }
+
+    #[test]
+    fn app_verbs_for_chain_parts() {
+        let r = match_app_verb("otwórz Discord").unwrap();
+        assert_eq!((r.tool.as_str(), &r.args), ("open_app", &json!({ "name": "Discord" })));
+        assert_eq!(match_app_verb("Zamknij Spotify").unwrap().tool, "close_app");
+        assert_eq!(match_app_verb("przełącz na Chrome").unwrap().args, json!({ "name": "Chrome" }));
+        assert_eq!(match_app_verb("weź odpal Visual Studio Code").unwrap().args, json!({ "name": "Visual Studio Code" }));
+        assert!(match_app_verb("otwórz").is_none());
+        assert!(match_app_verb("pauza").is_none());
     }
 
     #[test]

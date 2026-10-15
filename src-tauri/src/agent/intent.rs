@@ -165,6 +165,16 @@ pub fn classify_with(
     Intent::Dictation
 }
 
+/// First word (after fillers) is a command verb, or an infinitive after a request form — one
+/// part of a chained command („…, a potem ustaw timer na 30 minut”).
+pub fn starts_with_command_verb(text: &str) -> bool {
+    let folded: Vec<String> = text.split_whitespace().map(fold_word).collect();
+    let (skip, modal) = router::strip_filler(&folded);
+    folded.get(skip).is_some_and(|w| {
+        COMMAND_VERBS.contains(&w.as_str()) || (modal && REQUEST_INFINITIVES.contains(&w.as_str()))
+    })
+}
+
 /// Number of leading words that form the wake phrase ("soul", "hej soul"), if any.
 fn wake_word_len(folded: &[String], wake_word: &str) -> Option<usize> {
     let wake = fold_word(wake_word);

@@ -30,7 +30,7 @@ Settings → **Talk key → Mode**: **Smart (one key)** (default) or **Separate 
 | Circle-to-Ask | talk key + mouse drag, or `Ctrl+Shift+Space` | `Ctrl+Shift+Space` |
 | Stop Soul talking (barge-in) | press the talk key | press either talk hotkey |
 
-**Smart routing:** after you release, the transcript becomes a **command** when it starts with the wake word („Soul, …”, „Hej Soul …”), starts with a command verb (otwórz, zamknij, wyszukaj, znajdź, ścisz, podgłośnij, następna, pauza, przypomnij, pokaż, open, close, search… — up to 12 words), or is a short phrase the pre-router knows („następna piosenka”). Everything else is **dictation** and gets pasted.
+**Smart routing:** after you release, the transcript becomes a **command** when it starts with the wake word („Soul, …”, „Hej Soul …”), starts with a command verb (otwórz, zamknij, wyszukaj, znajdź, ścisz, podgłośnij, następna, pauza, przypomnij, pokaż, open, close, search… — up to 12 words), or is a short phrase the pre-router knows („następna piosenka”), or is a selected-text action („popraw to”). While the conversation context is alive (see below) a short follow-up („a teraz głośniej”, „a jutro?”, „a ten drugi?”) is a command too. Everything else is **dictation** and gets pasted.
 
 The talk key is read with a low-level hook (`WH_KEYBOARD_LL`/`WH_MOUSE_LL` on Windows, XRecord on X11). It can be any single key or mouse button: Ctrl/Shift/Win/Left Alt, Caps Lock, F1–F24, Pause, Insert, Menu, middle or side mouse buttons (record it in Settings). Taps shorter than 200 ms keep the key's normal behaviour (a swallowed side button is replayed) unless you tick *Block the key's normal action on short taps*; pressing another key while holding it (Right Ctrl+C) cancels the talk. The mic starts on press, but nothing is sent to Gemini until the key has been held for 200 ms. **X11:** XRecord can only observe, so side buttons/F-keys also do their normal action and the drag gesture also reaches the app under the cursor. **Wayland:** no global hooks, so Soul falls back to the separate hotkeys.
 
@@ -74,6 +74,18 @@ Circle-to-Ask captures the monitor under the cursor (`xcap`), dims it, lets you 
 | „zapamiętaj, że gram na serwerze CityRP” / „zapomnij o serwerze” / „co pamiętasz o grach” | Local memory (SQLite); facts are injected into prompts (max 15) |
 | „zanotuj kupić mleko” | Voice note (Plans tab, Settings → Pamięć) |
 | „stwórz scenę granie: otwórz Discord, FiveM i Spotify, głośność 40%” / „uruchom scenę granie” | Scenes (macros) with per-step chips on the Island |
+| „ścisz o 20” / „podgłośnij o 10” | System volume relative to the current level |
+| „zamknij Spotify i otwórz Discord” / „pauza i ścisz o 20” / „włącz scenę granie, a potem ustaw timer na 30 minut” | Chained commands: up to 4 actions in order, stops at the first failure; Island: „✓ Spotify zamknięty · ✓ Discord otwarty” |
+| „mów ciszej” → „a teraz głośniej” · „otwórz Discord” → „i zamknij go” · a question → „a jutro?” | Follow-ups (conversation context) |
+| „nowy temat” / „zapomnij” | Clears the conversation context |
+| select text, then „popraw to” / „przetłumacz to na angielski” / „zrób to bardziej formalne” / „zrób to luźniejsze” / „rozwiń to” | Selected text replaced by the result; „Cofnij” on the Island for 10 s |
+| select text, then „streść to” / „wyjaśnij to” | Result on the Island with „Kopiuj” / „Wklej” |
+
+**Conversation context:** Soul keeps the last 3 exchanges (what you said, the tools it ran with their arguments, its answer) in memory only, and forgets them after 90 s without a command (Settings → **Głos i dusza → Kontekst rozmowy**: on/off + timeout). The block is sent with the next command to the Live model and the REST paths, so follow-ups resolve; simple ones („głośniej” after a volume change, „i zamknij go” after opening an app, „anuluj go” after a timer) are resolved locally without the model. A small sky-blue dot on the Island shows it is alive; „nowy temat” / „zapomnij” clears it.
+
+**Chained commands** are split on „i”, „oraz”, „potem”, „a potem”, „następnie”, "and", "then" (and commas) only when every part is a command on its own („otwórz Discord i Spotify” or „timer na godzinę i 20 minut” stay one command). When every part is deterministic Soul runs them itself; otherwise the model gets the whole sentence and may return several function calls. Max 4 actions per utterance; dictation is never split.
+
+**Selected-text actions** read the selection only when you say one of these phrases (never otherwise; the models have no tool for it): Windows simulates Ctrl+C (Ctrl+Insert in terminals) and restores your clipboard right after; X11 reads the PRIMARY selection (clipboard untouched); Wayland is best effort. The text goes to Gemini (Ask model, default `gemini-3.1-flash-lite`, fallback `gemini-3.5-flash-lite`) with formatting and language preserved unless translating; it is never stored in the conversation context or spoken by the Live voice. „Cofnij” switches back to the app and sends its own undo (Ctrl+Z).
 
 `close_app` asks for Confirm/Cancel on an Island card (Esc = Cancel). While a command runs, the Island shows animated tool chips (Otwieram, Głośność…). No arbitrary shell — only the registered tools. Watch the console for `[soul][agent] tool_call` / `tool_result` logs.
 

@@ -103,6 +103,23 @@ pub trait Platform: Send + Sync {
     fn text_input_focused(&self) -> Option<bool> {
         None
     }
+
+    /// Current system output volume, 0–100 (relative „ścisz o 20”). Blocking; worker threads only.
+    fn get_volume(&self) -> Result<u8, String>;
+
+    /// Text selected in the focused app, for an explicitly invoked text action only. Windows:
+    /// simulated copy with the clipboard saved and restored; X11: the PRIMARY selection.
+    /// `Ok(None)` = nothing selected. Blocking (≤ ~0.6 s); worker threads only.
+    fn read_selection(&self) -> Result<Option<String>, String>;
+
+    /// Opaque id of the foreground window (to return focus after the Island was clicked).
+    fn active_window(&self) -> Option<u64>;
+
+    /// Bring a window from `active_window` back to the foreground. Best effort.
+    fn activate_window(&self, id: u64) -> Result<(), String>;
+
+    /// Send the app's own undo (Ctrl+Z) to the focused window.
+    fn send_undo(&self) -> Result<(), String>;
 }
 
 pub fn create_platform() -> Arc<dyn Platform> {
@@ -184,12 +201,60 @@ pub mod clipboard {
         paste_result
     }
 
-    #[allow(dead_code)] // used by Wayland paste fallback
+    /// What was on the clipboard before Soul borrowed it (text or image; other formats are lost).
+    #[cfg_attr(not(windows), allow(dead_code))] // Windows read_selection only
+    pub enum Saved {
+        Text(String),
+        Image(arboard::ImageData<'static>),
+        Empty,
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))] // Windows read_selection only
+    pub fn save(clipboard: &mut Clipboard) -> Saved {
+        if let Ok(t) = clipboard.get_text() {
+            return Saved::Text(t);
+        }
+        match clipboard.get_image() {
+            Ok(img) => Saved::Image(img.to_owned_img()),
+            Err(_) => Saved::Empty,
+        }
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))] // Windows read_selection only
+    pub fn restore(clipboard: &mut Clipboard, saved: Saved) {
+        let _ = match saved {
+            Saved::Text(t) => clipboard.set_text(t),
+            Saved::Image(img) => clipboard.set_image(img),
+            Saved::Empty => clipboard.clear(),
+        };
+    }
+
+    /// Volume parsed from `pactl get-sink-volume` ("… / 65% / …") or `amixer sget` ("[65%]").
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn parse_volume_percent(output: &str) -> Option<u8> {
+        output.split(|c: char| c.is_whitespace() || c == '[' || c == ']' || c == '/').find_map(|tok| {
+            let n = tok.strip_suffix('%')?;
+            n.parse::<u16>().ok().map(|v| v.min(100) as u8)
+        })
+    }
+
     pub fn copy_only(text: &str) -> Result<(), String> {
         let mut clipboard =
             Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?;
         clipboard
             .set_text(text)
             .map_err(|e| format!("Failed to set clipboard: {e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_volume_from_pactl_and_amixer() {
+        let pactl = "Volume: front-left: 42598 /  65% / -11.23 dB,   front-right: 42598 /  65% / -11.23 dB";
+        assert_eq!(super::clipboard::parse_volume_percent(pactl), Some(65));
+        let amixer = "  Front Left: Playback 52428 [80%] [on]";
+        assert_eq!(super::clipboard::parse_volume_percent(amixer), Some(80));
+        assert_eq!(super::clipboard::parse_volume_percent("no volume here"), None);
     }
 }

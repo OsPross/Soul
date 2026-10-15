@@ -182,5 +182,86 @@
       "route": "dictation"
     },
     "file": "pulapka_prosze.wav"
+  },
+  {
+    "file": "followup_glosniej.wav",
+    "context": [
+      {
+        "user": "mów ciszej",
+        "tool": "set_voice_volume",
+        "args": {
+          "delta": -20
+        },
+        "answer": "Głośność mojego głosu: 80%."
+      }
+    ],
+    "expect": {
+      "route": "command",
+      "tool": "set_voice_volume",
+      "args": {
+        "delta": 20
+      }
+    }
+  },
+  {
+    "file": "chain_spotify_discord.wav",
+    "expect": {
+      "route": "command",
+      "steps": [
+        {
+          "tool": "close_app",
+          "args": {
+            "name": "spotify"
+          }
+        },
+        {
+          "tool": "open_app",
+          "args": {
+            "name": "discord"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "file": "chain_pauza_sciszyc.wav",
+    "expect": {
+      "route": "command",
+      "steps": [
+        {
+          "tool": "media_control",
+          "args": {
+            "action": "pause"
+          }
+        },
+        {
+          "tool": "set_volume",
+          "args": {
+            "delta": -20
+          }
+        }
+      ]
+    }
+  },
+  {
+    "file": "tekst_przetlumacz.wav",
+    "expect": {
+      "route": "command",
+      "tool": "text_action",
+      "args": {
+        "action": "translate",
+        "language": "English"
+      }
+    }
+  },
+  {
+    "file": "tekst_popraw.wav",
+    "expect": {
+      "route": "command",
+      "tool": "text_action",
+      "args": {
+        "action": "fix"
+      }
+    }
   }
 ]

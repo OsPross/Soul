@@ -81,14 +81,24 @@ interface ToastAction {
 
 interface Toast {
   id: number;
-  kind: "memory" | "note" | "timer" | "scene" | "wake" | "info";
+  kind: "memory" | "note" | "timer" | "scene" | "wake" | "info" | "text";
   text: string;
   action?: ToastAction | null;
 }
 
 /** Backend commands a toast button may invoke (never anything else). */
-const TOAST_COMMANDS = new Set(["memory_delete", "scene_create_suggested"]);
-const TOAST_MS: Record<Toast["kind"], number> = { memory: 7000, note: 6000, timer: 15000, scene: 15000, wake: 7000, info: 6000 };
+const TOAST_COMMANDS = new Set(["memory_delete", "scene_create_suggested", "text_action_undo"]);
+/** `text` = „Cofnij” after a replace text action: valid for 10 s (`text_action::UNDO_WINDOW`). */
+const TOAST_MS: Record<Toast["kind"], number> = { memory: 7000, note: 6000, timer: 15000, scene: 15000, wake: 7000, info: 6000, text: 10000 };
+
+/** Summary / explanation of the selected text (`island://text-result`). */
+interface TextResult {
+  id: number;
+  title: string;
+  text: string;
+}
+/** An unread result card goes away on its own after this long. */
+const TEXT_RESULT_MS = 120_000;
 
 /** "4:05", "1:02:03" */
 export function countdown(ms: number): string {
@@ -113,7 +123,7 @@ type Tab = "now" | "clipboard" | "plans" | "apps" | "settings";
  * `stage` = big live-activity card, `compact` = same info squeezed into the pill (quiet mode
  * or "don't expand" for that feature).
  */
-type Stage = "confirm" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
+type Stage = "confirm" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
 
 const SIZE = {
   idle: { w: 236, h: 40, r: 20 },
@@ -122,6 +132,7 @@ const SIZE = {
   stage: { w: 420, h: 84, r: 28 },
   stageLong: { w: 460, h: 118, r: 28 },
   confirm: { w: 400, h: 140, r: 28 },
+  result: { w: 540, h: 230, r: 28 },
   toast: { w: 440, h: 76, r: 26 },
   update: { w: 420, h: 76, r: 26 },
   caption: { w: 440, h: 84, r: 28 },
@@ -170,7 +181,9 @@ function spiritStateOf(b: Banner, music: boolean): SpiritState {
 export default function Island() {
   const anim = useAnim();
   const t = useT();
-  const { mode, collapse, toggle, expand, handlers } = useIslandMode();
+  // Cards with buttons (text result, toast with an action) must not turn into peek on hover.
+  const holdCard = useRef(false);
+  const { mode, collapse, toggle, expand, handlers } = useIslandMode(holdCard);
   const cfg = anim.cfg;
 
   const [clock, setClock] = useState("--:--");
@@ -195,6 +208,9 @@ export default function Island() {
   const [paused, setPaused] = useState(false);
   const [timers, setTimers] = useState<TimerItem[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [textResult, setTextResult] = useState<TextResult | null>(null);
+  /** Conversation context alive until this wall-clock time (ms), for the subtle dot. */
+  const [contextUntil, setContextUntil] = useState<number | null>(null);
   const [wake, setWake] = useState<WakeMicState | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const shownAt = useRef(0);
@@ -274,6 +290,18 @@ export default function Island() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  useEffect(() => {
+    if (!textResult) return;
+    const id = window.setTimeout(() => setTextResult((r) => (r?.id === textResult.id ? null : r)), TEXT_RESULT_MS);
+    return () => window.clearTimeout(id);
+  }, [textResult]);
+
+  useEffect(() => {
+    if (contextUntil === null) return;
+    const id = window.setTimeout(() => setContextUntil(null), Math.max(0, contextUntil - Date.now()));
+    return () => window.clearTimeout(id);
+  }, [contextUntil]);
+
   // Second ticks only while a countdown is visible.
   useEffect(() => {
     if (timers.length === 0) return;
@@ -345,6 +373,14 @@ export default function Island() {
       if (p.kind !== "timer") cue("notify");
     });
     on<{ cue: Cue }>("soul://sfx", (p) => cue(p.cue));
+    on<TextResult>("island://text-result", (r) => {
+      setTextResult(r);
+      collapse(); // the card is a collapsed-mode stage
+      cue("notify");
+    });
+    on<{ active: boolean; expiresAtMs: number }>("island://context", (c) =>
+      setContextUntil(c.active && c.expiresAtMs > Date.now() ? c.expiresAtMs : null),
+    );
     on<WakeMicState>("soul://wake", setWake);
     on<{ name: string; label?: string | null; phase: ToolChip["phase"] }>("island://tool", (c) =>
       setTools((prev): ToolChip[] => {
@@ -386,7 +422,9 @@ export default function Island() {
   const stage: Stage =
     shown.state === "confirm"
       ? "confirm"
-      : toast?.kind === "timer"
+      : textResult
+        ? "result"
+        : toast?.kind === "timer"
         ? "toast"
         : active && !(shown.state === "done" && kind === "dictation" && showCaption)
           ? expandAllowed
@@ -402,11 +440,12 @@ export default function Island() {
                 ? "music"
                 : "idle";
   const nextTimer = timers[0] ?? null;
+  holdCard.current = stage === "result" || (stage === "toast" && Boolean(toast?.action));
 
   // Announce a new version once per version, only while Soul is quiet: never over a recording,
   // a spoken reply, a confirmation, a toast or a dictation caption (it waits for the next idle).
   const pending = hasPendingUpdate(update);
-  const quietNow = !active && !toast && !showCaption && mode === "collapsed";
+  const quietNow = !active && !toast && !textResult && !showCaption && mode === "collapsed";
   useEffect(() => {
     if (!pending || !update?.version || announced.current === update.version || !quietNow || quiet) return;
     announced.current = update.version;
@@ -442,7 +481,14 @@ export default function Island() {
 
   // Pause decorative loops when collapsed and idle for a while.
   const busy =
-    mode !== "collapsed" || active || showCaption || np.playing || timers.length > 0 || Boolean(toast) || Boolean(updateNotice);
+    mode !== "collapsed" ||
+    active ||
+    showCaption ||
+    np.playing ||
+    timers.length > 0 ||
+    Boolean(toast) ||
+    Boolean(textResult) ||
+    Boolean(updateNotice);
   useEffect(() => {
     if (!cfg.perf.pauseWhenIdle || busy) {
       setPaused(false);
@@ -547,7 +593,7 @@ export default function Island() {
         className="island-glass relative shrink-0 text-white"
         style={{ ["--accent" as string]: accent }}
         onClick={() => {
-          if (mode === "collapsed" && stage !== "confirm") expand();
+          if (mode === "collapsed" && stage !== "confirm" && stage !== "result") expand();
         }}
       >
         <LayoutGroup>
@@ -636,6 +682,9 @@ export default function Island() {
                   toast={toast}
                   onToastAction={onToastAction}
                   onToastClose={() => setToast(null)}
+                  textResult={textResult}
+                  onResultClose={() => setTextResult(null)}
+                  contextActive={contextUntil !== null}
                   timer={nextTimer}
                   nowMs={nowMs}
                   wake={wake}
@@ -711,6 +760,7 @@ const TOOL_LABELS: Record<string, [string, string]> = {
   set_timer: ["Timer", "Timer"],
   cancel_timer: ["Timer ✕", "Timer ✕"],
   run_scene: ["Scena", "Scene"],
+  text_action: ["Tekst", "Text"],
   create_scene: ["Nowa scena", "New scene"],
   now_playing: ["Co gra", "Now playing"],
   morning_briefing: ["Briefing", "Briefing"],
@@ -766,6 +816,9 @@ function Collapsed({
   toast,
   onToastAction,
   onToastClose,
+  textResult,
+  onResultClose,
+  contextActive,
   timer,
   nowMs,
   wake,
@@ -773,6 +826,9 @@ function Collapsed({
   onInstallUpdate,
   onUpdateClose,
 }: {
+  textResult: TextResult | null;
+  onResultClose: () => void;
+  contextActive: boolean;
   wake: WakeMicState | null;
   update: UpdateStatus | null;
   onInstallUpdate: () => void;
@@ -826,6 +882,10 @@ function Collapsed({
     );
   }
 
+  if (stage === "result" && textResult) {
+    return <TextResultCard result={textResult} spirit={spirit(26)} spiritLayout={spiritLayout} accent={accent} onClose={onResultClose} />;
+  }
+
   if (stage === "toast" && toast) {
     const color =
       toast.kind === "timer" ? tokens.accentDictation : toast.kind === "scene" ? tokens.accentAsk : toast.kind === "memory" ? tokens.success : accent;
@@ -834,7 +894,17 @@ function Collapsed({
         <SpiritSlot layoutId={spiritLayout}>{spirit(28)}</SpiritSlot>
         <div className="min-w-0 flex-1">
           <div className="text-[10.5px] font-medium uppercase tracking-wider" style={{ color }}>
-            {toast.kind === "timer" ? "⏰ Timer" : toast.kind === "scene" ? t("island.command") : toast.kind === "note" ? "✎" : toast.kind === "wake" ? "Soul" : "✓"}
+            {toast.kind === "timer"
+              ? "⏰ Timer"
+              : toast.kind === "scene"
+                ? t("island.command")
+                : toast.kind === "note"
+                  ? "✎"
+                  : toast.kind === "wake"
+                    ? "Soul"
+                    : toast.kind === "text"
+                      ? `✓ ${t("island.textResult")}`
+                      : "✓"}
           </div>
           <div className="line-clamp-2 text-[12.5px] leading-snug text-white/90">{toast.text}</div>
         </div>
@@ -930,6 +1000,7 @@ function Collapsed({
           {timer ? `⏱ ${countdown(timer.endsAtMs - nowMs)}` : clock}
         </span>
         <Marquee text={np.title} className="flex-1 text-[12px] font-medium text-white/90" />
+        <ContextDot active={contextActive} />
         <WakeMic wake={wake} />
         <EqBars playing={np.playing} color={accent} />
         <Artwork src={np.artworkDataUrl} size={22} radius={6} />
@@ -948,9 +1019,85 @@ function Collapsed({
       ) : (
         <span className="flex-1 text-center text-[12px] font-medium tabular-nums tracking-wide text-white/80">{clock}</span>
       )}
-      <span className="flex w-8 justify-end pr-0.5">
+      <span className="flex w-8 items-center justify-end gap-1.5 pr-0.5">
+        <ContextDot active={contextActive} />
         <WakeMic wake={wake} />
       </span>
+    </div>
+  );
+}
+
+/** Subtle dot while the conversation context is alive (follow-ups route to commands). */
+function ContextDot({ active }: { active: boolean }) {
+  const t = useT();
+  if (!active) return null;
+  const title = t("island.contextActive");
+  return (
+    <span
+      title={title}
+      aria-label={title}
+      className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+      style={{ background: tokens.accentCommand, opacity: 0.75, boxShadow: `0 0 6px ${tokens.accentCommand}` }}
+    />
+  );
+}
+
+/** Summary / explanation of the selected text with „Kopiuj” / „Wklej”. */
+function TextResultCard({
+  result,
+  spirit,
+  spiritLayout,
+  accent,
+  onClose,
+}: {
+  result: TextResult;
+  spirit: React.ReactNode;
+  spiritLayout?: string;
+  accent: string;
+  onClose: () => void;
+}) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => setCopied(false), [result.id]);
+  return (
+    <div className="flex h-full flex-col px-4 pb-3 pt-3" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-3">
+        <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
+        <div className="min-w-0 flex-1">
+          <div className="text-[10.5px] font-medium uppercase tracking-wider" style={{ color: accent }}>
+            {t("island.textResult")}
+          </div>
+          <div className="truncate text-[13px] font-semibold tracking-tight">{result.title}</div>
+        </div>
+        <Press onClick={onClose} className="soul-btn-ghost shrink-0 rounded-full px-2 py-1 text-[11px]" aria-label="Zamknij">
+          ✕
+        </Press>
+      </div>
+      <div className="soul-scroll mt-2 min-h-0 flex-1 select-text overflow-auto whitespace-pre-wrap pr-1 text-[12.5px] leading-snug text-white/85">
+        {result.text}
+      </div>
+      <div className="mt-2 flex justify-end gap-2">
+        <Press
+          onClick={() =>
+            invoke("text_result_copy", { id: result.id })
+              .then(() => setCopied(true))
+              .catch(() => undefined)
+          }
+          className="soul-btn-ghost rounded-full px-4 py-1.5 text-[12px]"
+        >
+          {copied ? `✓ ${t("island.copied")}` : t("island.copy")}
+        </Press>
+        <Press
+          onClick={() => {
+            invoke("text_result_paste", { id: result.id }).catch(() => undefined);
+            onClose();
+          }}
+          className="rounded-full px-4 py-1.5 text-[12px] font-semibold text-[#0b0d0c]"
+          style={{ background: accent }}
+        >
+          {t("island.paste")}
+        </Press>
+      </div>
     </div>
   );
 }

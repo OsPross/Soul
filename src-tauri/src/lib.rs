@@ -658,6 +658,9 @@ pub fn run() {
             save_appearance,
             system_power_state,
             agent::agent_confirm,
+            agent::text_action::text_action_undo,
+            agent::text_action::text_result_copy,
+            agent::text_action::text_result_paste,
             memory_list,
             memory_add,
             memory_update,
@@ -1248,7 +1251,8 @@ pub(crate) fn on_smart_released(app: &AppHandle) {
             }
         };
         let text_field = || platform.text_input_focused();
-        match agent::classify_smart(&heard.text, &settings.wake_word, &text_field) {
+        let context_active = agent::context_active(&settings);
+        match agent::classify_smart(&heard.text, &settings.wake_word, &text_field, context_active) {
             agent::Intent::Command { text, reason } => {
                 eprintln!(
                     "[soul][dictation] smart route=command reason={reason} ms={}",

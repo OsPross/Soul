@@ -39,10 +39,26 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `ai/cleanup.rs` – dictation cleanup: local filler removal + LLM pass only when a self-correction is detected.
 - `ai/quota.rs` – per-model daily 429 exhaustion tracking until midnight Pacific.
 - `agent/mod.rs` – voice-command session + tool dispatch (`close_app` requires overlay Confirm/Cancel), spoken-reply
-  draining + barge-in. `agent/router.rs` – deterministic Polish/English pre-router run before the LLM (returns `PreRoute` or `None`);
+  draining + barge-in. `local_dispatch` runs before any model, in order: context reset („nowy temat”/„zapomnij”) →
+  text action → deterministic follow-up → chain (all parts deterministic) → pre-router. Model calls: up to
+  `chain::MAX_ACTIONS` (4) per command, in order, stop at the first failure, every call id answered (later Live
+  toolCalls in the same turn continue the chain via `LateTools`). `agent/router.rs` – deterministic Polish/English pre-router run before the LLM (returns `PreRoute` or `None`);
   strips filler openers („weź mi”, „czy możesz”, „ej”) first and keeps the user's original words in queries.
+  „ścisz o 20” = `set_volume {delta}` (`Platform::get_volume`); `match_app_verb` (open/close/focus) is for chain parts only.
+  `agent/context.rs` – conversation context: last 3 exchanges (user, tools+args, answer), in memory only, expire after
+  `context_timeout_secs` (90) idle, toggle `context_enabled` (Settings → Głos i dusza → Kontekst rozmowy); `begin_turn`/`note_user`/`note_tool`/`commit(turn)` (a newer turn wins). Sent as a
+  `[CONTEXT]` block: Live text turns (prefix), Live audio turns (`begin_turn_with_context` → `clientContent`
+  `turnComplete:false` before `activityStart`), REST agent + `search_answer`. `resolve_followup` handles „głośniej”/„i zamknij go”/
+  „anuluj go” locally; `looks_like_followup` gates Smart routing (≤ 6 words + connector/relative word/short question).
+  Island dot `island://context`. `agent/chain.rs` – connector split (i, oraz, potem, a potem, następnie, and, then, commas)
+  only where every part is a command; Island line „✓ … · ✓ …”. `agent/text_action.rs` – „popraw/przetłumacz/streść/
+  zrób bardziej formalne|luźniejsze/rozwiń/wyjaśnij to”: strict parser (every word must be object/filler/language),
+  `Platform::read_selection` → REST `GeminiClient::text_action` (Ask model + fallback) → paste over the selection with
+  `text_action_undo` (10 s, re-focus + Ctrl+Z) or `island://text-result` (`text_result_copy`/`text_result_paste`). The
+  selection is read only after an explicit match (no model tool), never enters the context, never goes to Live.
   `agent/intent.rs` – Smart-mode classifier: fuzzy wake word / command verb / short pre-router match / lone greeting /
-  short „?” question (unless `Platform::text_input_focused`) → command, else dictation. Scene triggers match fuzzily
+  short „?” question (unless `Platform::text_input_focused`) → command, else dictation; `classify_smart` adds text actions,
+  context resets and — only while context is alive — follow-ups. Dictation traps (`pulapka_*`) must stay dictation. Scene triggers match fuzzily
   (`scenes::match_trigger`: phonetic tokens + similarity ≥ 0.8).
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
@@ -76,7 +92,9 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 ### Platform trait (`platform/mod.rs`)
 `trait Platform: Send + Sync` with `register_hotkey`, `type_text`, `paste_text`, `capture_screen`, `open_app`,
 `search_apps`, `close_app`, `focus_app`, `open_url`, `web_search`/`youtube_search`/`youtube_play` (default impls via
-`apps.rs` URL helpers), `set_volume`, `media_control`. `create_platform()` returns `Arc<dyn Platform>`:
+`apps.rs` URL helpers), `set_volume`, `get_volume`, `media_control`, `read_selection` (Windows: Ctrl+C / Ctrl+Insert in
+consoles, waits on `GetClipboardSequenceNumber`, restores text/image clipboard; X11: PRIMARY), `active_window` /
+`activate_window` (refocus the app after an Island click), `send_undo`. `create_platform()` returns `Arc<dyn Platform>`:
 `windows.rs` on Windows; on Linux `linux_x11.rs`, or `linux_wayland.rs` when `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE=wayland`.
 Platform-specific code lives only in these files (behind `#[cfg(target_os)]`); everything else must stay portable.
 `platform::clipboard::with_temporary_text` pastes then restores the previous clipboard. `apps.rs` = fuzzy app index.
@@ -185,7 +203,8 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
   thread) and `soul://voice-level` (TTS) are kept in refs and read inside rAF loops; stale values decay.
 - **Island stages** (`island/Island.tsx`): panel morphs width/height/radius with `anim.spring("morph")`; content is a
   keyed `AnimatePresence` crossfade sized to the target; the spirit glides via `layoutId`. Collapsed priority:
-  confirm card > live stage (or compact pill when quiet / per-mode expand is off) > dictation caption > music > idle.
+  confirm card > text result card > live stage (or compact pill when quiet / per-mode expand is off) > dictation caption > music > idle.
+  Cards with buttons (text result, toast with an action) set `holdCard` so hover does not turn them into peek.
   Rust tags banners with `kind` (`island::set_activity`: dictation | command) and emits `island://tool` (tool chips)
   and `island://caption` (cleaned dictation text). Confirm/Cancel for `close_app` is rendered on the Island.
 - **Accents / tokens** (`src/theme/tokens.ts`): `bg, bgElevated, border, textPrimary, textSecondary, accentDictation`

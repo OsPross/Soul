@@ -272,6 +272,60 @@ impl Platform for LinuxX11Platform {
         Ok(format!("Opened {url}"))
     }
 
+    fn get_volume(&self) -> Result<u8, String> {
+        read_volume()
+    }
+
+    fn read_selection(&self) -> Result<Option<String>, String> {
+        use arboard::{GetExtLinux, LinuxClipboardKind};
+        // X11 keeps the highlighted text in PRIMARY: no simulated copy, the clipboard is untouched.
+        let mut cb =
+            arboard::Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?;
+        match cb.get().clipboard(LinuxClipboardKind::Primary).text() {
+            Ok(t) => Ok(Some(t).filter(|t| !t.trim().is_empty())),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(e) => Err(format!("Could not read the selection: {e}")),
+        }
+    }
+
+    fn active_window(&self) -> Option<u64> {
+        let out = Command::new("xdotool").arg("getactivewindow").output().ok()?;
+        String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    }
+
+    fn activate_window(&self, id: u64) -> Result<(), String> {
+        let ok = Command::new("xdotool")
+            .args(["windowactivate", "--sync", &id.to_string()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok {
+            Ok(())
+        } else {
+            Err("Could not focus the window (install xdotool).".into())
+        }
+    }
+
+    fn send_undo(&self) -> Result<(), String> {
+        if Command::new("xdotool")
+            .args(["key", "--clearmodifiers", "ctrl+z"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let mut enigo = Enigo::new(&Settings::default())
+            .map_err(|e| format!("Failed to init input simulation: {e}"))?;
+        enigo
+            .key(Key::Control, Direction::Press)
+            .map_err(|e| format!("Undo failed (Ctrl press): {e}"))?;
+        let z = enigo.key(Key::Unicode('z'), Direction::Click);
+        let up = enigo.key(Key::Control, Direction::Release);
+        z.map_err(|e| format!("Undo failed (Z): {e}"))?;
+        up.map_err(|e| format!("Undo failed (Ctrl release): {e}"))
+    }
+
     fn set_volume(&self, percent: u8) -> Result<String, String> {
         let percent = percent.min(100);
         if Command::new("pactl")
@@ -426,6 +480,23 @@ pub(super) fn sysfs_on_battery() -> Option<bool> {
         }
     }
     has_battery.then_some(!ac_online)
+}
+
+/// Default sink volume via `pactl` (PipeWire/PulseAudio), else ALSA `amixer`. Shared with Wayland.
+pub(super) fn read_volume() -> Result<u8, String> {
+    for (program, args) in [
+        ("pactl", &["get-sink-volume", "@DEFAULT_SINK@"][..]),
+        ("amixer", &["sget", "Master"][..]),
+    ] {
+        if let Ok(out) = Command::new(program).args(args).output() {
+            if out.status.success() {
+                if let Some(v) = clipboard::parse_volume_percent(&String::from_utf8_lossy(&out.stdout)) {
+                    return Ok(v);
+                }
+            }
+        }
+    }
+    Err("Could not read the volume. Install pactl (pulseaudio/pipewire) or amixer.".into())
 }
 
 #[cfg(test)]

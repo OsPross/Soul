@@ -256,7 +256,8 @@ pub struct LiveEvent {
 enum Cmd {
     Configure(LiveSetup),
     Disable,
-    Begin(std_mpsc::Sender<LiveEvent>, u64),
+    /// Push-to-talk turn; the optional text (conversation `[CONTEXT]`) is sent before the audio.
+    Begin(std_mpsc::Sender<LiveEvent>, u64, Option<String>),
     /// A complete user turn given as text (`clientContent`), e.g. a Smart-mode command.
     BeginText(std_mpsc::Sender<LiveEvent>, u64, String),
     Audio(Vec<u8>),
@@ -318,10 +319,16 @@ impl LiveSession {
 
     /// Start a push-to-talk turn. Events are collected until `end_turn` hands out the receiver.
     pub fn begin_turn(&self) -> u64 {
+        self.begin_turn_with_context(None)
+    }
+
+    /// `begin_turn` whose audio is preceded by `context` as user text (no reply is triggered
+    /// for it: `turnComplete: false`), so a spoken follow-up sees the `[CONTEXT]` block.
+    pub fn begin_turn_with_context(&self, context: Option<String>) -> u64 {
         let (tx, rx) = std_mpsc::channel();
         let id = self.new_turn_id();
         *self.turn_rx.lock() = Some(rx);
-        self.send(Cmd::Begin(tx, id));
+        self.send(Cmd::Begin(tx, id, context));
         id
     }
 
@@ -425,6 +432,8 @@ struct Turn {
     events: std_mpsc::Sender<LiveEvent>,
     /// Text turn (`clientContent`) instead of streamed audio.
     text: Option<String>,
+    /// Audio turn: context text sent (without completing the turn) before activityStart.
+    preamble: Option<String>,
     /// A toolCall was delivered and not answered yet: a turnComplete must not end the turn,
     /// the model still has to speak after our toolResponse.
     tool_pending: bool,
@@ -556,8 +565,8 @@ impl Actor {
                 self.resume_handle = None;
                 self.close("disabled").await;
             }
-            Cmd::Begin(events, id) => self.begin(events, id, None).await,
-            Cmd::BeginText(events, id, text) => self.begin(events, id, Some(text)).await,
+            Cmd::Begin(events, id, context) => self.begin(events, id, None, context).await,
+            Cmd::BeginText(events, id, text) => self.begin(events, id, Some(text), None).await,
             Cmd::Audio(pcm) => {
                 let Some(turn) = self.turn.as_mut() else {
                     return;
@@ -622,7 +631,13 @@ impl Actor {
         }
     }
 
-    async fn begin(&mut self, events: std_mpsc::Sender<LiveEvent>, id: u64, text: Option<String>) {
+    async fn begin(
+        &mut self,
+        events: std_mpsc::Sender<LiveEvent>,
+        id: u64,
+        text: Option<String>,
+        preamble: Option<String>,
+    ) {
         self.last_used = Instant::now();
         if let Some(mut old) = self.turn.take() {
             old.emit(TurnEvent::Error("superseded by a new turn".into()));
@@ -639,6 +654,7 @@ impl Actor {
             id,
             events,
             text,
+            preamble,
             tool_pending: false,
             opened: false,
             ended: is_text,
@@ -766,6 +782,20 @@ impl Actor {
         }
         let backlog: Vec<Vec<u8>> = turn.audio[turn.sent_chunks..].to_vec();
         let ended = turn.ended;
+        if let Some(context) = turn.preamble.clone() {
+            let chars = context.chars().count();
+            if self
+                .send_json(json!({
+                    "clientContent": {
+                        "turns": [{ "role": "user", "parts": [{ "text": context }] }],
+                        "turnComplete": false
+                    }
+                }))
+                .await
+            {
+                soul_live_log(self.label, &format!("context_preamble chars={chars}"));
+            }
+        }
 
         if !self
             .send_json(json!({ "realtimeInput": { "activityStart": {} } }))

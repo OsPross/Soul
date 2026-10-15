@@ -13,6 +13,10 @@
 //!
 //! Case: `{ "file": "x.wav", "expect": { "route": "command", "tool": "media_control",
 //! "args": { "action": "next" }, "text_contains": "faktur" }, "synthetic": false }`.
+//! Chained commands: `"steps": [{ "tool": "close_app", "args": { "name": "spotify" } }, …]`
+//! (every step in order; `tool`/`args` check the first one). Follow-ups: `"context": [{ "user",
+//! "tool", "args", "answer" }]` seeds the conversation context before the case (otherwise it is
+//! empty).
 //! Every `expect` key is optional; string args match when the actual value contains the expected
 //! one (case- and diacritic-insensitive), `text_contains` takes a string or a list (diacritic-
 //! insensitive), `text_equals` compares the whole text ignoring case and punctuation but NOT
@@ -26,8 +30,9 @@
 //! `live::POLISH_TRANSCRIPTION_HINT` to the transcription session).
 
 use crate::agent::{self, Intent};
+use crate::agent::context::{self, Exchange, ToolUse};
 use crate::ai::gemini::{
-    agent_tool_declarations, build_agent_body_from_text, extract_function_calls,
+    agent_tool_declarations, build_agent_body_with_context, extract_function_calls,
     extract_text_from_value, FunctionCall, GeminiClient,
 };
 use crate::ai::live::{self, collect_dictation, LiveSession, TurnEvent};
@@ -38,8 +43,8 @@ use std::io::Cursor;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-/// Tool picked for a command (name + args), and which stage decided it.
-type CommandDecision = (Option<(String, Value)>, &'static str);
+/// Tools picked for a command (name + args, in order), and which stage decided them.
+type CommandDecision = (Vec<(String, Value)>, &'static str);
 
 const REPORT_FILE: &str = "report.md";
 const SCENES_FILE: &str = "scenes.json";
@@ -175,6 +180,8 @@ struct Run {
     /// Pasted text for dictation, command text for commands.
     text: String,
     tool: Option<(String, Value)>,
+    /// Every tool of the command in order (chained commands); `tool` is the first.
+    steps: Vec<(String, Value)>,
     /// pre-router | live | live-voice | rest
     via: &'static str,
     total_ms: u128,
@@ -248,17 +255,20 @@ impl Pipeline {
             reason: "",
             text: String::new(),
             tool: None,
+            steps: Vec::new(),
             via: "",
             total_ms: 0,
         };
         // No focused app in the harness: the text-field signal is unknown, as on Linux.
-        match agent::classify_smart(&transcript, &self.settings.wake_word, &|| None) {
+        let context_active = agent::context_active(&self.settings);
+        match agent::classify_smart(&transcript, &self.settings.wake_word, &|| None, context_active) {
             Intent::Command { text, reason } => {
                 run.route = "command";
                 run.reason = reason;
-                let (tool, via) = self.command(&text)?;
+                let (steps, via) = self.command(&text)?;
                 run.text = text;
-                run.tool = tool;
+                run.tool = steps.first().cloned();
+                run.steps = steps;
                 run.via = via;
             }
             Intent::Dictation => run.text = self.cleanup(&transcript, stt),
@@ -290,25 +300,30 @@ impl Pipeline {
     /// `agent::text_command` decision: pre-router → Live tools → REST tools. Nothing executes.
     fn command(&self, text: &str) -> Result<CommandDecision, String> {
         if text.trim().is_empty() {
-            return Ok((None, "wake-word-only"));
+            return Ok((Vec::new(), "wake-word-only"));
         }
-        if let Some((tool, args, reason)) = agent::preview_route(text) {
-            eprintln!("[soul][agent] router=pre-router reason={reason} tool={tool} args={args} (dry-run)");
-            return Ok((Some((tool, args)), "pre-router"));
+        if let Some((steps, reason)) = agent::preview_plan(text, &self.settings) {
+            eprintln!("[soul][agent] router=pre-router reason={reason} steps={steps:?} (dry-run)");
+            return Ok((steps, "pre-router"));
         }
+        let ctx = agent::context_block(&self.settings);
         if self.settings.use_live_api {
-            if let Some(decision) = self.live_command(text) {
+            let turn = match &ctx {
+                Some(block) => agent::with_context_block(block, text),
+                None => text.to_string(),
+            };
+            if let Some(decision) = self.live_command(&turn) {
                 return Ok(decision);
             }
             eprintln!("[soul][agent] Live gave no decision for text command — REST tools");
         }
-        self.rest_command(text)
+        self.rest_command(text, ctx.as_deref())
     }
 
-    fn live_command(&self, text: &str) -> Option<(Option<(String, Value)>, &'static str)> {
+    fn live_command(&self, text: &str) -> Option<CommandDecision> {
         let (rx, id) = self.commands.begin_text_turn(text);
         let mut deadline = Instant::now() + LIVE_DECISION_TIMEOUT;
-        let mut call: Option<FunctionCall> = None;
+        let mut calls_seen: Vec<FunctionCall> = Vec::new();
         let mut reply = String::new();
         while let Ok(ev) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             match ev.kind {
@@ -327,17 +342,21 @@ impl Pipeline {
                         })
                         .collect();
                     self.commands.send_tool_responses(responses);
-                    if call.is_none() {
+                    if calls_seen.is_empty() {
+                        deadline = Instant::now() + REPLY_DRAIN;
+                    }
+                    for c in &calls {
                         eprintln!(
                             "[soul][agent] router=Live tool_call name={} args={} (dry-run)",
-                            calls[0].call.name, calls[0].call.args
+                            c.call.name, c.call.args
                         );
-                        call = Some(calls[0].call.clone());
-                        deadline = Instant::now() + REPLY_DRAIN;
+                        if calls_seen.len() < 4 {
+                            calls_seen.push(c.call.clone());
+                        }
                     }
                 }
                 TurnEvent::Text(t) | TurnEvent::OutputTranscript(t) => reply.push_str(&t),
-                TurnEvent::Complete { after_end: true } if call.is_some() || !reply.trim().is_empty() => {
+                TurnEvent::Complete { after_end: true } if !calls_seen.is_empty() || !reply.trim().is_empty() => {
                     break
                 }
                 TurnEvent::Error(e) => {
@@ -348,18 +367,19 @@ impl Pipeline {
             }
         }
         self.commands.finish_turn_id(id);
-        match call {
-            Some(c) => Some((Some((c.name, c.args)), "live")),
-            None if !reply.trim().is_empty() => Some((
-                Some(("answer".into(), json!({ "text": reply.trim() }))),
-                "live-voice",
-            )),
-            None => None,
+        if !calls_seen.is_empty() {
+            return Some((calls_seen.into_iter().map(|c| (c.name, c.args)).collect(), "live"));
         }
+        (!reply.trim().is_empty()).then(|| {
+            (
+                vec![("answer".into(), json!({ "text": reply.trim() }))],
+                "live-voice",
+            )
+        })
     }
 
-    fn rest_command(&self, text: &str) -> Result<CommandDecision, String> {
-        let initial = build_agent_body_from_text(text, &self.settings.language)?;
+    fn rest_command(&self, text: &str, ctx: Option<&str>) -> Result<CommandDecision, String> {
+        let initial = build_agent_body_with_context(text, &self.settings.language, ctx)?;
         let mut body = json!({
             "contents": initial["contents"],
             "tools": [{ "function_declarations": agent_tool_declarations() }],
@@ -372,12 +392,15 @@ impl Pipeline {
         let response =
             self.rest
                 .agent_generate_resilient(body, Some(&self.fallback), |_, _| {}, |_| {})?;
-        if let Some(c) = extract_function_calls(&response).into_iter().next() {
-            eprintln!("[soul][agent] router=LLM(REST) tool_call name={} args={} (dry-run)", c.name, c.args);
-            return Ok((Some((c.name, c.args)), "rest"));
+        let calls = extract_function_calls(&response);
+        if !calls.is_empty() {
+            for c in &calls {
+                eprintln!("[soul][agent] router=LLM(REST) tool_call name={} args={} (dry-run)", c.name, c.args);
+            }
+            return Ok((calls.into_iter().take(4).map(|c| (c.name, c.args)).collect(), "rest"));
         }
         let answer = extract_text_from_value(&response).unwrap_or_default();
-        Ok((Some(("answer".into(), json!({ "text": answer }))), "rest"))
+        Ok((vec![("answer".into(), json!({ "text": answer }))], "rest"))
     }
 }
 
@@ -446,6 +469,28 @@ fn check(expect: &Value, run: &Run) -> Vec<String> {
             }
         }
     }
+    if let Some(steps) = expect["steps"].as_array() {
+        if steps.len() != run.steps.len() {
+            fails.push(format!("{} steps ≠ {}", run.steps.len(), steps.len()));
+        }
+        for (i, (want, got)) in steps.iter().zip(run.steps.iter()).enumerate() {
+            if let Some(tool) = want["tool"].as_str() {
+                if tool != got.0 {
+                    fails.push(format!("step {} tool {} ≠ {tool}", i + 1, got.0));
+                }
+            }
+            for (k, v) in want["args"].as_object().into_iter().flatten() {
+                let actual = got.1.get(k);
+                if !value_matches(v, actual) {
+                    fails.push(format!(
+                        "step {} args.{k} {} ≠ {v}",
+                        i + 1,
+                        actual.map(|a| a.to_string()).unwrap_or("—".into())
+                    ));
+                }
+            }
+        }
+    }
     let needles: Vec<&str> = match &expect["text_contains"] {
         Value::String(s) => vec![s.as_str()],
         Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
@@ -478,6 +523,10 @@ fn describe_expect(expect: &Value) -> String {
     if let Some(t) = expect["tool"].as_str() {
         let args = expect.get("args").map(|a| a.to_string()).unwrap_or_default();
         parts.push(format!("{t} {args}").trim().to_string());
+    }
+    if let Some(steps) = expect["steps"].as_array() {
+        let names: Vec<&str> = steps.iter().filter_map(|s| s["tool"].as_str()).collect();
+        parts.push(names.join(" → "));
     }
     match &expect["text_contains"] {
         Value::Null => {}
@@ -579,6 +628,31 @@ fn render(settings: &Settings, rows: &[Row], wall: Duration) -> String {
     out
 }
 
+/// The case's `context` (earlier exchanges) becomes the conversation context; none = empty.
+fn seed_context(case: &Value) {
+    context::reset_for_test();
+    let Some(list) = case["context"].as_array() else {
+        return;
+    };
+    let exchanges = list
+        .iter()
+        .map(|e| Exchange {
+            user: e["user"].as_str().unwrap_or_default().to_string(),
+            tools: e["tool"]
+                .as_str()
+                .map(|t| ToolUse {
+                    name: t.to_string(),
+                    args: e.get("args").cloned().unwrap_or(json!({})),
+                    ok: true,
+                })
+                .into_iter()
+                .collect(),
+            answer: e["answer"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect();
+    context::seed(exchanges);
+}
+
 #[test]
 #[ignore]
 fn voice_regression() {
@@ -627,6 +701,7 @@ fn voice_regression() {
         }
         ran_any = true;
         println!("[voice] {file} …");
+        seed_context(case);
         let result = load_pcm16k(&path).and_then(|pcm| {
             if pcm.len() < CHUNK_BYTES {
                 return Err("sample shorter than 100 ms".into());
@@ -642,6 +717,10 @@ fn voice_regression() {
                     format!("{} ({})", run.route, run.reason)
                 };
                 row.tool = match &run.tool {
+                    Some(_) if run.steps.len() > 1 => {
+                        let all: Vec<String> = run.steps.iter().map(|(n, a)| format!("{n} {a}")).collect();
+                        format!("{} [{}]", all.join(" → "), run.via)
+                    }
                     Some((name, args)) => format!("{name} {args} [{}]", run.via),
                     None if run.route == "dictation" => format!("paste \u{201e}{}\u{201d}", run.text),
                     None => format!("— [{}]", run.via),
@@ -701,6 +780,7 @@ mod tests {
             route,
             reason: "",
             text: text.into(),
+            steps: tool.iter().map(|(n, a)| (n.to_string(), a.clone())).collect(),
             tool: tool.map(|(n, a)| (n.to_string(), a)),
             via: "pre-router",
             total_ms: 0,
@@ -732,6 +812,20 @@ mod tests {
         assert!(check(&json!({ "text_contains": "faktur" }), &r).is_empty());
         assert!(check(&json!({ "text_contains": ["FAKTURE", "pazdziernik"] }), &r).is_empty());
         assert_eq!(check(&json!({ "text_contains": "rachunek" }), &r).len(), 1);
+    }
+
+    #[test]
+    fn chained_steps_are_checked_in_order() {
+        let mut r = run("command", "Zamknij Spotify i otwórz Discord", Some(("close_app", json!({ "name": "Spotify" }))));
+        r.steps.push(("open_app".into(), json!({ "name": "Discord" })));
+        let ok = json!({ "steps": [
+            { "tool": "close_app", "args": { "name": "spotify" } },
+            { "tool": "open_app", "args": { "name": "discord" } }
+        ] });
+        assert!(check(&ok, &r).is_empty());
+        let swapped = json!({ "steps": [{ "tool": "open_app" }, { "tool": "close_app" }] });
+        assert_eq!(check(&swapped, &r).len(), 2);
+        assert_eq!(check(&json!({ "steps": [{ "tool": "close_app" }] }), &r).len(), 1);
     }
 
     #[test]

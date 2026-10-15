@@ -11,7 +11,11 @@ SOUL_TEST_KEY=<key> npm run test:voice:synth    # (optional) Gemini TTS samples 
 
 PowerShell: `$env:SOUL_TEST_KEY="<key>"; npm run test:voice`.
 
-- `cases.json` – `[{ "file", "expect": { "route", "tool", "args", "text_contains", "text_equals" }, "synthetic"? }]`.
+- `cases.json` – `[{ "file", "expect": { "route", "tool", "args", "steps", "text_contains", "text_equals" }, "context"?, "synthetic"? }]`.
+  `steps` = every action of a chained command in order (`[{ "tool", "args" }]`); `context` = earlier exchanges
+  (`[{ "user", "tool", "args", "answer" }]`) seeded as conversation context before the case (follow-ups),
+  otherwise the context is empty. Text actions show up as tool `text_action` (`args.action`: fix, translate,
+  summarize, formal, casual, expand, explain; `args.language` for translations) and never read a selection.
   Every `expect` key is optional; string args pass when the actual value contains the expected
   text (case/diacritic-insensitive); `text_contains` is a string or a list; `text_equals` ignores
   case and punctuation but not diacritics. Missing WAVs are SKIPped.

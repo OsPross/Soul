@@ -569,6 +569,31 @@ export function VoicePage({ s }: P) {
       </Card>
 
       <Card
+        title={tr(lang, "Kontekst rozmowy", "Conversation context")}
+        action={<Toggle checked={form.contextEnabled ?? true} onChange={(contextEnabled) => patch({ contextEnabled })} />}
+        description={tr(
+          lang,
+          "Soul pamięta ostatnie 3 polecenia, więc działają dopytania: „a teraz głośniej”, „a jutro?”, „i zamknij go”. Kropka na wyspie = kontekst aktywny; „nowy temat” albo „zapomnij” go czyści. Zaznaczony tekst nigdy nie trafia do kontekstu.",
+          "Soul remembers the last 3 commands, so follow-ups work: “now louder”, “and tomorrow?”, “and close it”. A dot on the Island = context active; “new topic” or “forget it” clears it. Selected text never goes into the context.",
+        )}
+      >
+        <Row
+          label={tr(lang, "Zapomnij po bezczynności", "Forget after inactivity")}
+          hint={tr(lang, "Tyle czasu bez polecenia i kontekst znika.", "This long without a command and the context is gone.")}
+          disabled={!(form.contextEnabled ?? true)}
+        >
+          <Slider
+            value={form.contextTimeoutSecs ?? 90}
+            min={30}
+            max={300}
+            step={15}
+            onChange={(v) => patch({ contextTimeoutSecs: Math.round(v) })}
+            format={(v) => `${Math.round(v)} s`}
+          />
+        </Row>
+      </Card>
+
+      <Card
         title={tr(lang, "Wyszukiwanie", "Search")}
         description={tr(
           lang,

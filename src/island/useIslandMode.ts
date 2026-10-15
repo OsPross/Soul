@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
 
 export type IslandMode = "collapsed" | "peek" | "expanded";
 
@@ -17,8 +17,9 @@ const WHEEL_LOCK_MS = 350;
  * All transitions go through `go`, which reads/writes `modeRef`, so timers never
  * see stale state. If the mode is open while the pointer is not over the panel,
  * a leave timer is always armed (so a missed `pointerleave` can't leave it stuck).
+ * While `hold.current` is true (a card with buttons is shown) hovering does not peek.
  */
-export function useIslandMode() {
+export function useIslandMode(hold?: MutableRefObject<boolean>) {
   const [mode, setMode] = useState<IslandMode>("collapsed");
   const modeRef = useRef<IslandMode>("collapsed");
   const hovering = useRef(false);
@@ -65,13 +66,13 @@ export function useIslandMode() {
       window.clearTimeout(leaveTimer.current);
       leaveTimer.current = null;
     }
-    if (modeRef.current === "collapsed" && hoverTimer.current === null) {
+    if (modeRef.current === "collapsed" && hoverTimer.current === null && !hold?.current) {
       hoverTimer.current = window.setTimeout(() => {
         hoverTimer.current = null;
-        if (hovering.current && modeRef.current === "collapsed") go("peek");
+        if (hovering.current && modeRef.current === "collapsed" && !hold?.current) go("peek");
       }, HOVER_PEEK_MS);
     }
-  }, [go]);
+  }, [go, hold]);
 
   const onPointerLeave = useCallback(() => {
     hovering.current = false;

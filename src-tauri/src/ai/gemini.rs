@@ -816,8 +816,13 @@ impl GeminiClient {
         query: &str,
         language: &str,
         fallback_model: Option<&str>,
+        context: Option<&str>,
     ) -> Result<String, String> {
-        let body = search_answer_body(query, language);
+        let mut body = search_answer_body(query, language);
+        if let Some(ctx) = context {
+            body["contents"][0]["parts"][0]["text"] =
+                Value::String(crate::agent::with_context_block(ctx, query));
+        }
         let value = self.agent_generate_resilient(body, fallback_model, |_, _| {}, |_| {})?;
         let text = extract_text_from_value(&value)?;
         let text = text.replace(['*', '#'], "");
@@ -827,6 +832,58 @@ impl GeminiClient {
         }
         Ok(text)
     }
+
+    /// Selected-text action („popraw to”, „przetłumacz to na angielski”): text in → text out.
+    /// Same immediate-fallback policy as the agent; the selection is only in this request.
+    pub fn text_action(
+        &self,
+        instruction: &str,
+        text: &str,
+        fallback_model: Option<&str>,
+    ) -> Result<String, String> {
+        let body = text_action_body(instruction, text);
+        let value = self.agent_generate_resilient(body, fallback_model, |_, _| {}, |_| {})?;
+        let out = clean_text_action_output(&extract_text_from_value(&value)?);
+        if out.trim().is_empty() {
+            return Err("Gemini returned an empty result.".into());
+        }
+        Ok(out)
+    }
+}
+
+/// Request for `text_action` (separate for tests).
+pub fn text_action_body(instruction: &str, text: &str) -> Value {
+    let system = format!(
+        "You are Soul's text tool. The user selected text in another app; it is between <text> and </text>. \
+{instruction} Output only the resulting text: no preface, no explanation of your changes, no quotes, \
+no <text> tags, and no markdown code fences unless the input itself had them."
+    );
+    serde_json::json!({
+        "system_instruction": { "parts": [{ "text": system }] },
+        "contents": [{ "role": "user", "parts": [{ "text": format!("<text>\n{text}\n</text>") }] }],
+        "generation_config": {
+            "temperature": 0.2,
+            "thinkingConfig": { "thinkingBudget": 0 }
+        }
+    })
+}
+
+/// Strip wrappers a model sometimes adds around a text-action result (tags, a whole-text fence).
+pub fn clean_text_action_output(out: &str) -> String {
+    let mut s = out.trim();
+    s = s.strip_prefix("<text>").unwrap_or(s);
+    s = s.strip_suffix("</text>").unwrap_or(s);
+    let t = s.trim();
+    if t.len() > 6 && t.starts_with("```") && t.ends_with("```") && !t[3..t.len() - 3].contains("```") {
+        // One fence around the whole answer: drop it (and its language tag).
+        let inner = &t[3..t.len() - 3];
+        let inner = match inner.split_once('\n') {
+            Some((tag, rest)) if tag.trim().chars().all(|c| c.is_ascii_alphanumeric()) => rest,
+            _ => inner,
+        };
+        return inner.trim_matches(['\n', '\r']).to_string();
+    }
+    s.trim_matches(['\n', '\r']).to_string()
 }
 
 /// Request for `search_answer` (separate for tests).
@@ -861,7 +918,10 @@ pub fn agent_live_system_prompt(language: &str) -> String {
     let rule = reply_language_rule(language);
     format!(
         "You are Soul, a desktop voice assistant. Understand the user's spoken command in {lang}. {rule} \
-Call exactly ONE tool per command unless the user clearly asks for multiple actions. \
+Call exactly ONE tool per command unless the user clearly asks for multiple actions; for several actions in one \
+command (\u{201e}zamknij Spotify i otwórz Discord\u{201d}) call all their tools in one response, in the spoken order, at most four. \
+Only a [CONTEXT] block sent with a command is conversation context: use it to resolve follow-ups (\u{201e}a jutro?\u{201d}, \
+\u{201e}i zamknij go\u{201d}, \u{201e}głośniej\u{201d}); without one, treat the command as a new topic. \
 Never call web_search unless the user explicitly says to search/find/look up \
 (e.g. wyszukaj, znajdź, poszukaj, wygoogluj, search, find, look up). \
 For YouTube, use youtube_search (results page) or youtube_play (first result) — never web_search. \
@@ -922,7 +982,17 @@ pub fn agent_voice_system_prompt(settings: &crate::config::Settings) -> String {
 const TOOL_GUIDE: &str = "Use remember when the user asks you to remember something or states a durable personal fact (e.g. \"gram na serwerze X\", \"moja playlista to Y\"); forget to delete facts; recall when asked what you remember. Use set_timer for timers and reminders (\"nastaw 10 minut na makaron\"). Use run_scene to run a saved scene by name and create_scene to define one. Use set_voice_volume for \"mów ciszej/głośniej\" (Soul's own voice, not the system volume). Use now_playing for \"co gra?\" and add_note for quick notes.";
 
 /// Build the agent request from an already-transcribed command (text + tools).
+#[cfg(test)]
 pub fn build_agent_body_from_text(transcript: &str, language: &str) -> Result<Value, String> {
+    build_agent_body_with_context(transcript, language, None)
+}
+
+/// `build_agent_body_from_text` with the conversation `[CONTEXT]` block (follow-ups).
+pub fn build_agent_body_with_context(
+    transcript: &str,
+    language: &str,
+    context: Option<&str>,
+) -> Result<Value, String> {
     let transcript = transcript.trim();
     if transcript.is_empty() {
         return Err("Empty transcript.".into());
@@ -939,7 +1009,10 @@ pub fn build_agent_body_from_text(transcript: &str, language: &str) -> Result<Va
         "contents": [{
             "role": "user",
             "parts": [
-                { "text": format!("Execute this voice command:\n{transcript}") }
+                { "text": match context {
+                    Some(ctx) => format!("{ctx}\nExecute this voice command:\n{transcript}"),
+                    None => format!("Execute this voice command:\n{transcript}"),
+                } }
             ]
         }],
         "tools": [{ "function_declarations": agent_tool_declarations() }],
@@ -1034,13 +1107,13 @@ pub fn agent_tool_declarations() -> Value {
         },
         {
             "name": "set_volume",
-            "description": "Set system speaker volume to a percentage 0–100.",
+            "description": "Set system speaker volume: percent (absolute 0–100) or delta (relative, e.g. -20 for 'ścisz o 20', 10 for 'głośniej').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "percent": { "type": "integer", "description": "0–100" }
-                },
-                "required": ["percent"]
+                    "percent": { "type": "integer", "description": "0–100" },
+                    "delta": { "type": "integer", "description": "-100–100, relative to the current volume" }
+                }
             }
         },
         {

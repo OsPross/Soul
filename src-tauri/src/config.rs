@@ -164,6 +164,12 @@ pub struct Settings {
     /// Save durable facts stated in commands ("gram na serwerze X") with an Island chip.
     #[serde(default = "default_true")]
     pub auto_remember: bool,
+    /// Remember the last few command exchanges for follow-ups („a teraz głośniej”, „a jutro?”).
+    #[serde(default = "default_true")]
+    pub context_enabled: bool,
+    /// Forget that conversation context after this many seconds without a command.
+    #[serde(default = "default_context_timeout")]
+    pub context_timeout_secs: u32,
     /// Offline wake word ("Soul", rustpotter): listen locally, open a turn on detection.
     /// Owned by `wake::save_config` (autosaved), never overwritten by `save_app_settings`.
     #[serde(default)]
@@ -221,6 +227,9 @@ fn default_personality() -> String {
 fn default_voice_volume() -> u8 {
     DEFAULT_VOICE_VOLUME
 }
+fn default_context_timeout() -> u32 {
+    crate::agent::CONTEXT_TIMEOUT_SECS
+}
 fn default_wake_sensitivity() -> f32 {
     DEFAULT_WAKE_SENSITIVITY
 }
@@ -263,6 +272,8 @@ impl Default for Settings {
             duck_music: false,
             search_open_browser: true,
             auto_remember: true,
+            context_enabled: true,
+            context_timeout_secs: crate::agent::CONTEXT_TIMEOUT_SECS,
             wake_enabled: false,
             wake_sensitivity: DEFAULT_WAKE_SENSITIVITY,
             wake_pause_in_games: true,
@@ -428,6 +439,12 @@ pub fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings, String>
     settings.duck_music = bool_or("duckMusic", false);
     settings.search_open_browser = bool_or("searchOpenBrowser", true);
     settings.auto_remember = bool_or("autoRemember", true);
+    settings.context_enabled = bool_or("contextEnabled", true);
+    settings.context_timeout_secs = store
+        .get("contextTimeoutSecs")
+        .and_then(|v| v.as_u64())
+        .map(|v| v.clamp(15, 600) as u32)
+        .unwrap_or(crate::agent::CONTEXT_TIMEOUT_SECS);
     settings.wake_enabled = bool_or("wakeEnabled", false);
     settings.wake_sensitivity = store
         .get("wakeSensitivity")
@@ -613,6 +630,11 @@ pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Res
     store.set("duckMusic", serde_json::Value::Bool(settings.duck_music));
     store.set("searchOpenBrowser", serde_json::Value::Bool(settings.search_open_browser));
     store.set("autoRemember", serde_json::Value::Bool(settings.auto_remember));
+    store.set("contextEnabled", serde_json::Value::Bool(settings.context_enabled));
+    store.set(
+        "contextTimeoutSecs",
+        serde_json::Value::from(settings.context_timeout_secs.clamp(15, 600)),
+    );
     store.set("wakeEnabled", serde_json::Value::Bool(settings.wake_enabled));
     store.set(
         "wakeSensitivity",
@@ -668,6 +690,8 @@ pub fn redact_settings(settings: &Settings) -> serde_json::Value {
         "duckMusic": settings.duck_music,
         "searchOpenBrowser": settings.search_open_browser,
         "autoRemember": settings.auto_remember,
+        "contextEnabled": settings.context_enabled,
+        "contextTimeoutSecs": settings.context_timeout_secs,
         "wakeEnabled": settings.wake_enabled,
         "wakeSensitivity": settings.wake_sensitivity,
         "wakePauseInGames": settings.wake_pause_in_games,
