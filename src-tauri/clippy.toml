@@ -1,0 +1,6 @@
+# Windows: every spawned process must go through `platform::windows::hidden_command` /
+# `shell_open`, or Soul (a GUI-subsystem app) flashes a console window. The Linux backends opt out
+# with a module-level allow (no console windows there).
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "on Windows use platform::windows::hidden_command (CREATE_NO_WINDOW) or shell_open (ShellExecuteW)" },
+]

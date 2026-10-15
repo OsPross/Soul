@@ -6,6 +6,12 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: no more console window flashing on voice commands („włącz Spotify”, „włącz muzykę”),
+  closing apps, media keys, volume and scenes. Apps and links open via ShellExecute instead of
+  `cmd /c start`; every helper process runs with `CREATE_NO_WINDOW`.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added

@@ -85,6 +85,11 @@ Input hook: `platform/hook.rs` holds the portable `HookCore` (swallow/replay/mas
 and Soul falls back to the separate combos.
 Adding a capability: add a trait method, implement it in **all three** backends (Wayland may stub with a clear error).
 `duck_other_audio` (WASAPI sessions / `pactl` sink inputs) and `set_do_not_disturb` (toast registry / gsettings or dunst) are best effort.
+Windows process spawns: only `windows::hidden_command` (sets `CREATE_NO_WINDOW`), `windows::powershell` (hidden, non-interactive)
+and `windows::shell_open` (`ShellExecuteW`, for apps / `.lnk` / `shell:AppsFolder` / URLs) — never `cmd /c start`. The release
+exe is GUI-subsystem, so any other spawn flashes a console window; `src-tauri/clippy.toml` disallows `Command::new` (Linux
+backends opt out with a module-level allow). Check: `cargo test --release --lib console_probe -- --ignored` (detaches from its
+console, watches for new console windows, includes a must-detect control).
 
 ## Run / build
 

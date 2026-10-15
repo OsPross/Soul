@@ -1,3 +1,6 @@
+// Linux spawns helpers (xdotool, pactl, xdg-open…) directly: no console windows to hide here.
+#![allow(clippy::disallowed_methods)]
+
 use super::apps::{
     collect_desktop_apps, letter_icon_data_url, pick_best, search_suggestions, validate_http_url,
     AppEntry, AppSuggestion,

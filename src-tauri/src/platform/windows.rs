@@ -5,8 +5,60 @@ use super::apps::{
 use super::{clipboard, Platform};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use parking_lot::Mutex;
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+/// `CREATE_NO_WINDOW`: console programs (powershell, taskkill, reg) get no console window.
+/// Soul is a GUI-subsystem app, so without it every spawn flashes a black window.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// The only way this backend spawns a process: never shows a console window.
+#[allow(clippy::disallowed_methods)] // the one sanctioned `Command::new`
+pub(crate) fn hidden_command(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Hidden, non-interactive PowerShell running `script`.
+fn powershell(script: &str) -> Command {
+    let mut cmd = hidden_command("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+    ]);
+    cmd
+}
+
+/// Open a file, `.lnk` shortcut, `shell:AppsFolder\…` app or URL like Explorer would
+/// (`ShellExecuteW` "open") — no `cmd /c start`, so no console window.
+pub(crate) fn shell_open(target: &str) -> Result<(), String> {
+    use windows::core::{w, HSTRING, PCWSTR};
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    // Shell verbs may need COM on the calling thread (Microsoft's ShellExecute guidance);
+    // S_FALSE / RPC_E_CHANGED_MODE just mean it is already initialised.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    }
+    let file = HSTRING::from(target);
+    let result = unsafe { ShellExecuteW(None, w!("open"), &file, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    // > 32 = success; otherwise an SE_ERR_* / Win32 error code.
+    let code = result.0 as isize;
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecute failed (code {code})"))
+    }
+}
 
 pub struct WindowsPlatform {
     app_cache: Mutex<Option<(Instant, Vec<AppEntry>)>>,
@@ -58,16 +110,10 @@ impl WindowsPlatform {
                 } else {
                     format!("shell:AppsFolder\\{}", entry.target)
                 };
-                Command::new("explorer.exe")
-                    .arg(&target)
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch UWP '{}': {e}", entry.name))?;
+                shell_open(&target).map_err(|e| format!("Failed to launch UWP '{}': {e}", entry.name))?;
             }
             AppKind::Shortcut | AppKind::Desktop => {
-                Command::new("cmd")
-                    .args(["/C", "start", "", &entry.target])
-                    .spawn()
-                    .map_err(|e| format!("Failed to launch '{}': {e}", entry.name))?;
+                shell_open(&entry.target).map_err(|e| format!("Failed to launch '{}': {e}", entry.name))?;
             }
         }
         Ok(())
@@ -79,15 +125,7 @@ $q = $env:SOUL_QUERY
 Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } |
   ForEach-Object { "{0}`t{1}`t{2}" -f $_.Id, $_.ProcessName, $_.MainWindowTitle }
 "#;
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script,
-            ])
+        let output = powershell(script)
             .env("SOUL_QUERY", query)
             .output()
             .map_err(|e| format!("Failed to list windows: {e}"))?;
@@ -246,10 +284,8 @@ impl Platform for WindowsPlatform {
     }
 
     fn set_do_not_disturb(&self, on: bool) -> Result<String, String> {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         // Toast banners on/off for the current user (there is no public Focus Assist API).
-        let status = Command::new("reg")
+        let status = hidden_command("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\PushNotifications",
@@ -261,7 +297,6 @@ impl Platform for WindowsPlatform {
                 if on { "0" } else { "1" },
                 "/f",
             ])
-            .creation_flags(CREATE_NO_WINDOW)
             .status()
             .map_err(|e| format!("Do Not Disturb: {e}"))?;
         if status.success() {
@@ -340,7 +375,7 @@ impl Platform for WindowsPlatform {
 
     fn close_app(&self, name: &str) -> Result<String, String> {
         let (pid, label) = Self::find_process_window(name)?;
-        let status = Command::new("taskkill")
+        let status = hidden_command("taskkill")
             .args(["/PID", &pid.to_string(), "/T"])
             .status()
             .map_err(|e| format!("Failed to close '{label}': {e}"))?;
@@ -368,15 +403,7 @@ public class SoulWin {{
 [void][SoulWin]::SetForegroundWindow($p.MainWindowHandle)
 "#
         );
-        let status = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &script,
-            ])
+        let status = powershell(&script)
             .status()
             .map_err(|e| format!("Failed to focus '{label}': {e}"))?;
         if status.success() {
@@ -388,10 +415,7 @@ public class SoulWin {{
 
     fn open_url(&self, url: &str) -> Result<String, String> {
         let url = validate_http_url(url)?;
-        Command::new("cmd")
-            .args(["/C", "start", "", &url])
-            .spawn()
-            .map_err(|e| format!("Failed to open URL: {e}"))?;
+        shell_open(&url).map_err(|e| format!("Failed to open URL: {e}"))?;
         Ok(format!("Opened {url}"))
     }
 
@@ -436,15 +460,7 @@ public class SoulAudio {{
 [SoulAudio]::SetVolume({level})
 "#
         );
-        let output = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &script,
-            ])
+        let output = powershell(&script)
             .output()
             .map_err(|e| format!("Failed to set volume: {e}"))?;
         if output.status.success() {
@@ -482,15 +498,7 @@ public class SoulMedia {{
 [SoulMedia]::keybd_event({vk}, 0, 2, [UIntPtr]::Zero)
 "#
         );
-        let status = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &script,
-            ])
+        let status = powershell(&script)
             .status()
             .map_err(|e| format!("Media key failed: {e}"))?;
         if status.success() {
@@ -516,15 +524,7 @@ fn build_windows_app_index() -> Vec<AppEntry> {
     }
 
     // UWP / Store apps via Get-StartApps
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "Get-StartApps | ForEach-Object { \"$($_.Name)`t$($_.AppID)\" }",
-        ])
+    let output = powershell("Get-StartApps | ForEach-Object { \"$($_.Name)`t$($_.AppID)\" }")
         .output();
 
     if let Ok(output) = output {
@@ -554,4 +554,127 @@ fn build_windows_app_index() -> Vec<AppEntry> {
 
     eprintln!("[soul][platform] indexed {} Windows apps", apps.len());
     apps
+}
+
+/// Opt-in check that Soul's spawns never show a console window (the "włącz Spotify" flash).
+///   cargo test --manifest-path src-tauri/Cargo.toml --release --lib console_probe -- --ignored --nocapture --test-threads=1
+/// The test detaches from its console first (`FreeConsole`), like the GUI-subsystem release app —
+/// otherwise children would silently share the test's console and nothing could flash. Side
+/// effects: opens + closes Character Map and Calculator, opens one https://example.com tab and sends
+/// play/pause twice.
+#[cfg(test)]
+mod console_probe {
+    use super::*;
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, IsWindowVisible};
+
+    const CONSOLE_CLASSES: [&str; 2] = ["ConsoleWindowClass", "CASCADIA_HOSTING_WINDOW_CLASS"];
+
+    fn visible_consoles() -> HashSet<isize> {
+        unsafe extern "system" fn cb(hwnd: HWND, lp: LPARAM) -> BOOL {
+            let out = &mut *(lp.0 as *mut HashSet<isize>);
+            let mut buf = [0u16; 64];
+            let n = GetClassNameW(hwnd, &mut buf) as usize;
+            let class = String::from_utf16_lossy(&buf[..n]);
+            if IsWindowVisible(hwnd).as_bool() && CONSOLE_CLASSES.contains(&class.as_str()) {
+                out.insert(hwnd.0 as isize);
+            }
+            true.into()
+        }
+        let mut set = HashSet::new();
+        unsafe {
+            let _ = EnumWindows(Some(cb), LPARAM(&mut set as *mut _ as isize));
+        }
+        set
+    }
+
+    /// Run `f` while polling every 10 ms for console windows that weren't there before.
+    fn new_consoles_during(label: &str, settle_ms: u64, f: impl FnOnce()) -> usize {
+        let baseline = visible_consoles();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(Mutex::new(HashSet::new()));
+        let watcher = {
+            let (stop, seen, baseline) = (stop.clone(), seen.clone(), baseline.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    for h in visible_consoles().difference(&baseline) {
+                        seen.lock().insert(*h);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        };
+        f();
+        std::thread::sleep(Duration::from_millis(settle_ms));
+        stop.store(true, Ordering::SeqCst);
+        watcher.join().unwrap();
+        let n = seen.lock().len();
+        eprintln!("[console_probe] {label:<40} new console windows: {n}");
+        n
+    }
+
+    #[test]
+    #[ignore]
+    fn no_console_windows() {
+        unsafe {
+            let _ = windows::Win32::System::Console::FreeConsole();
+        }
+        let p = WindowsPlatform::new();
+
+        // Negative control: a bare spawn of a console program MUST be detected, or this probe proves nothing.
+        #[allow(clippy::disallowed_methods)]
+        let control = new_consoles_during("control: bare `cmd /c ping` (old bug)", 300, || {
+            let _ = Command::new("cmd").args(["/C", "ping -n 3 127.0.0.1 >NUL"]).spawn();
+        });
+        assert!(control > 0, "detector failed: the unflagged control spawn showed no console window");
+        std::thread::sleep(Duration::from_millis(2500)); // let the control window close
+
+        let mut total = 0;
+        total += new_consoles_during("app index (Get-StartApps powershell)", 300, || {
+            let _ = build_windows_app_index();
+        });
+        total += new_consoles_during("open_app .lnk/exe path (Character Map)", 1500, || {
+            WindowsPlatform::launch_entry(&AppEntry {
+                name: "Character Map".into(),
+                target: r"C:\Windows\System32\charmap.exe".into(),
+                kind: AppKind::Shortcut,
+            })
+            .unwrap();
+        });
+        total += new_consoles_during("focus_app (powershell + Add-Type)", 300, || {
+            let _ = p.focus_app("charmap");
+        });
+        total += new_consoles_during("close_app (powershell + taskkill)", 500, || {
+            p.close_app("charmap").unwrap();
+        });
+        total += new_consoles_during("open_app UWP path (Calculator)", 2000, || {
+            WindowsPlatform::launch_entry(&AppEntry {
+                name: "Calculator".into(),
+                target: "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App".into(),
+                kind: AppKind::Uwp,
+            })
+            .unwrap();
+        });
+        total += new_consoles_during("close Calculator (hidden taskkill)", 500, || {
+            let _ = hidden_command("taskkill").args(["/IM", "CalculatorApp.exe", "/F"]).status();
+        });
+        total += new_consoles_during("open_url / youtube / web_search", 800, || {
+            p.open_url("https://example.com").unwrap();
+        });
+        total += new_consoles_during("media_control play/pause ×2", 300, || {
+            p.media_control("play_pause").unwrap();
+            std::thread::sleep(Duration::from_millis(600));
+            p.media_control("play_pause").unwrap();
+        });
+        total += new_consoles_during("set_volume path (powershell)", 300, || {
+            assert!(powershell("exit 0").status().unwrap().success());
+        });
+        total += new_consoles_during("DND path (hidden reg query)", 300, || {
+            let _ = hidden_command("reg").args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\PushNotifications"]).output();
+        });
+        assert_eq!(total, 0, "console windows appeared");
+    }
 }
