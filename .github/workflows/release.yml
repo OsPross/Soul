@@ -60,13 +60,24 @@ jobs:
           **Windows:** `Soul_*_x64-setup.exe` (recommended, self-updating) or `.msi`. Unsigned build — SmartScreen may warn: *More info → Run anyway*.
           **Linux:** `.AppImage` (self-updating), `.deb` (Ubuntu/Debian: `sudo apt install ./Soul_*.deb`) or `.rpm` (Fedora: `sudo dnf install ./Soul-*.rpm`).
           EOF
+          # Re-run of the same tag: reuse its (draft) release.
           ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)"
           if [ -z "$ID" ]; then
-            FLAGS=(--draft --verify-tag --title "Soul $GITHUB_REF_NAME" --notes-file notes.md)
-            [ "$PRERELEASE" = "true" ] && FLAGS+=(--prerelease)
-            gh release create "$GITHUB_REF_NAME" "${FLAGS[@]}"
-            ID="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq ".[] | select(.tag_name == \"$GITHUB_REF_NAME\") | .id" | head -n1)"
+            # Take the id from the create response: the release list is eventually consistent, so
+            # looking the new draft up right after creating it can come back empty (v0.2.0 run #1).
+            ID="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$GITHUB_REF_NAME" \
+              -f name="Soul $GITHUB_REF_NAME" \
+              -F body=@notes.md \
+              -F draft=true \
+              -F prerelease="$PRERELEASE" \
+              --jq .id)"
           fi
+          if ! [[ "$ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not create or find the release for $GITHUB_REF_NAME (got '$ID')"
+            exit 1
+          fi
+          echo "Release id: $ID"
           echo "id=$ID" >> "$GITHUB_OUTPUT"
 
   build:
