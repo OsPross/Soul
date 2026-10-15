@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Soul",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "com.oskar.soul",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -61,14 +61,68 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
+    "publisher": "OsPross",
+    "copyright": "© 2026 OsPross",
+    "category": "Productivity",
+    "shortDescription": "Voice AI desktop assistant",
+    "longDescription": "Soul — voice AI desktop assistant with a Dynamic Island, push-to-talk dictation, Circle-to-Ask and voice commands, powered by the Gemini API.",
+    "homepage": "https://github.com/OsPross/Soul",
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
-      "icons/icon.ico"
-    ]
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "Polish"
+        ],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2",
+          "libayatana-appindicator3-1"
+        ]
+      },
+      "rpm": {
+        "depends": [
+          "alsa-lib",
+          "libayatana-appindicator-gtk3"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFOUVFRTI3QzY5NERCMkQKUldRdDI1VEdKKzZlemlCTTA1VEJTU20wSEwxL3lFMkZOSzF3cWo3cnhuSUZkQk9rcDlRbGhrZk4K",
+      "endpoints": [
+        "https://github.com/OsPross/Soul/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

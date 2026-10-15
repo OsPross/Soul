@@ -414,10 +414,10 @@ pub(super) fn sysfs_on_battery() -> Option<bool> {
         let kind = std::fs::read_to_string(path.join("type")).unwrap_or_default();
         match kind.trim() {
             "Battery" => has_battery = true,
-            "Mains" | "USB" => {
-                if std::fs::read_to_string(path.join("online")).map(|v| v.trim() == "1").unwrap_or(false) {
-                    ac_online = true;
-                }
+            "Mains" | "USB"
+                if std::fs::read_to_string(path.join("online")).map(|v| v.trim() == "1").unwrap_or(false) =>
+            {
+                ac_online = true;
             }
             _ => {}
         }

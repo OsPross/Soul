@@ -119,7 +119,52 @@ The Island is a frameless always-on-top pill at the top of the **primary** monit
 - **Settings → Pamięć:** list / search / edit / delete / clear all remembered facts and notes, toggle *Zapamiętuj automatycznie* (facts stated in commands, e.g. „gram na serwerze X”, are saved with a „Zapamiętałem: …” chip and **Cofnij**). Stored in `soul-memory.db` in the app data dir; passwords and keys are refused.
 - **Settings → Sceny:** ordered steps (open app / link, YouTube, search, system volume, media, delay, Do Not Disturb) and trigger phrases („gramy w FiveM”). When the same 2+ apps are opened together by voice 3 times, the Island suggests a scene. Do Not Disturb = Windows toast banners off / GNOME `show-banners` or dunst on Linux.
 
-## Prerequisites
+## Install
+
+Download the latest installer from **[GitHub Releases](https://github.com/OsPross/Soul/releases/latest)**.
+
+| System | File | Updates |
+|--------|------|---------|
+| Windows 10/11 | `Soul_<version>_x64-setup.exe` (recommended) | automatic |
+| Windows (IT / Group Policy) | `Soul_<version>_x64_en-US.msi` | automatic |
+| Any Linux (X11) | `Soul_<version>_amd64.AppImage` — `chmod +x`, run | automatic |
+| Ubuntu / Debian / Mint | `Soul_<version>_amd64.deb` — `sudo apt install ./Soul_<version>_amd64.deb` | download the new `.deb` (Soul shows a link) |
+| Fedora / RHEL / openSUSE | `Soul-<version>-1.x86_64.rpm` — `sudo dnf install ./Soul-<version>-1.x86_64.rpm` | download the new `.rpm` (Soul shows a link) |
+
+After installing, open **Settings** from the tray icon, paste your Gemini API key and **Save**.
+
+**Windows SmartScreen:** the builds are not code-signed yet, so Windows may show *“Windows protected your PC”*.
+Click **More info → Run anyway**. The installer is per-user (no admin prompt) and installs to
+`%LOCALAPPDATA%\Soul`. The update files themselves are signed with Soul's updater key, so the
+in-app updater only accepts genuine releases.
+
+**Linux runtime packages:** the `.deb`/`.rpm` pull in WebKitGTK 4.1, ALSA and libayatana-appindicator
+automatically; the AppImage bundles them. On GNOME you need the *AppIndicator* extension to see the tray icon.
+
+### Updates
+
+Settings → **O aplikacji / About**: current version, **Sprawdź aktualizacje** (check now), the changelog of
+the new release, a download progress bar and **Uruchom ponownie** (restart to install).
+
+- **Automatyczne aktualizacje** (default on): checks 30 s after start and every 6 h, downloads in the
+  background, then shows *„Nowa wersja vX.Y — Zainstaluj”* on the Island. Nothing installs until you click,
+  and never while Soul is recording, speaking or answering — the install waits until it's idle.
+- **Kanał** *Stabilny* / *Beta*: beta also receives prereleases (`v0.3.0-beta.1`).
+- `.deb` / `.rpm` installs are owned by the package manager, so Soul only links to the new package.
+- Updates are signed (minisign); a download with a wrong signature is rejected.
+
+### Your data
+
+Settings (`soul-settings.json`, incl. the API key), memory (`soul-memory.db`) and the trained wake word
+(`wakeword/`) live in the app data dir, never next to the program, so they survive updates and reinstalls:
+
+- Windows: `%APPDATA%\com.oskar.soul\`
+- Linux: `~/.local/share/com.oskar.soul/`
+
+The Windows uninstaller keeps them unless you tick **“Delete the application data”**; MSI, `.deb`, `.rpm`
+and the AppImage never touch them. To reset Soul completely, delete that folder.
+
+## Prerequisites (building from source)
 
 ### All platforms
 
@@ -152,6 +197,14 @@ sudo apt install -y \
   pkg-config
 ```
 
+Full list used by CI (Ubuntu 22.04): `scripts/ci-linux-deps.sh`. On Fedora:
+
+```bash
+sudo dnf install -y webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel \
+  librsvg2-devel alsa-lib-devel libxdo-devel rpm-build
+sudo dnf group install -y c-development
+```
+
 Optional paste helpers:
 
 - **X11:** `xdotool` (fallback if `enigo` is flaky)
@@ -171,10 +224,59 @@ Default talk key: **Right Ctrl**. Hold to speak, release to paste or run a comma
 ## Build
 
 ```bash
-npm run tauri build
+npm run tauri build                                   # all installers for this OS, unsigned updater artifacts
+npm run tauri build -- --bundles nsis                 # just one format (nsis, msi, deb, rpm, appimage)
 ```
 
-Artifacts land under `src-tauri/target/release/` (and the platform bundle folder).
+Installers land in `src-tauri/target/release/bundle/` (`nsis/`, `msi/`, `deb/`, `rpm/`, `appimage/`).
+Building `.rpm` needs the `rpm` tool (`sudo apt install rpm`); `scripts/ci-linux-deps.sh` installs everything
+CI uses on Ubuntu 22.04. Updater `.sig` files are only produced with the release config and the signing key:
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/soul-updater.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="…" \
+npm run tauri build -- --config src-tauri/tauri.release.conf.json
+```
+
+## Release
+
+Version lives in `package.json`; `tauri.conf.json` reads it (`"version": "../package.json"`) and
+`npm run version:sync` mirrors it into `src-tauri/Cargo.toml` / `Cargo.lock` (CI fails if they differ).
+
+1. Write what changed under `## [Unreleased]` in `CHANGELOG.md` (or leave it empty to use the commit subjects).
+2. `npm run release -- 0.2.0` (beta: `npm run release -- 0.3.0-beta.1`) — bumps all versions, moves the
+   changelog section, commits `Release v0.2.0` and tags `v0.2.0`. Nothing is pushed.
+3. Push what it prints: `git push origin main v0.2.0`.
+4. **Release** workflow (`.github/workflows/release.yml`) builds Windows (NSIS + MSI) and Linux
+   (`.deb`, `.rpm`, `.AppImage`) on `windows-latest` / `ubuntu-22.04`, signs the updater artifacts and creates a
+   **draft** GitHub Release with the installers, `.sig` files and `latest.json`.
+5. Check the draft on GitHub → **Publish release**. From then on installed apps see the update
+   (`https://github.com/OsPross/Soul/releases/latest/download/latest.json`; betas via the GitHub API).
+
+Betas are marked *prerelease* and ship only the NSIS installer on Windows (MSI can't encode `-beta.1`).
+
+**One-time setup — updater signing key** (already generated; the public key is in `tauri.conf.json`):
+
+- Repository → Settings → Secrets and variables → Actions → *New repository secret*:
+  - `TAURI_SIGNING_PRIVATE_KEY` = the full contents of `~/.tauri/soul-updater.key`
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` = the contents of `~/.tauri/soul-updater.key.password`
+- Back up both files (password manager + offline copy). **If the private key is lost, installed copies can
+  never auto-update again** — users would have to reinstall manually. Never commit it.
+
+CI (`.github/workflows/ci.yml`, every push / PR, Windows + Ubuntu 22.04): version check, frontend
+typecheck + build, `cargo check`, `cargo clippy -D warnings`, router + all unit tests.
+
+### Code signing (later, optional)
+
+Unsigned Windows builds trigger SmartScreen until they gain reputation. To sign:
+
+- Buy an OV/EV code-signing certificate (or use Azure Trusted Signing / SignPath for open source).
+- Set `bundle.windows.certificateThumbprint` + `digestAlgorithm: "sha256"` + `timestampUrl`
+  (local `.pfx` imported on the runner), **or** `bundle.windows.signCommand` for a cloud signer
+  (e.g. `"signCommand": "trusted-signing-cli -e https://… -a <account> -c <profile> %1"`).
+- Add the certificate / credentials as GitHub secrets and import them in `release.yml` before `tauri-action`.
+
+This is independent of the updater key above (that one only signs update packages).
 
 ## Architecture
 
@@ -200,7 +302,8 @@ src-tauri/src/
 
 ## Settings
 
-Stored locally in the app data dir as `soul-settings.json` (API key, hotkey, model, language). The API key is never written to logs.
+Stored locally in the app data dir as `soul-settings.json` (API key, hotkey, model, language) — see
+[Your data](#your-data). The API key is never written to logs.
 
 ## License
 

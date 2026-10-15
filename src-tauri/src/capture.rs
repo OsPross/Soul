@@ -43,36 +43,8 @@ pub fn capture_monitor_under_cursor() -> Result<CaptureResult, String> {
 
     let t0 = Instant::now();
     let (cx, cy) = cursor_position()?;
-    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {e}"))?;
-    if monitors.is_empty() {
-        return Err("No monitors found for screen capture.".into());
-    }
-
-    let monitor = monitors
-        .into_iter()
-        .find(|m| {
-            let Ok(x) = m.x() else { return false };
-            let Ok(y) = m.y() else { return false };
-            let Ok(w) = m.width() else { return false };
-            let Ok(h) = m.height() else { return false };
-            cx >= x && cy >= y && cx < x + w as i32 && cy < y + h as i32
-        })
-        .or_else(|| {
-            // Fallback: primary / first monitor.
-            xcap::Monitor::all().ok().and_then(|mut m| m.drain(..).next())
-        })
-        .ok_or_else(|| "Could not find a monitor for capture.".to_string())?;
-
-    let mx = monitor.x().map_err(|e| format!("monitor.x: {e}"))?;
-    let my = monitor.y().map_err(|e| format!("monitor.y: {e}"))?;
-    let width = monitor.width().map_err(|e| format!("monitor.width: {e}"))?;
-    let height = monitor
-        .height()
-        .map_err(|e| format!("monitor.height: {e}"))?;
-
-    let rgba = monitor
-        .capture_image()
-        .map_err(|e| format!("Screen capture failed: {e}"))?;
+    let (mx, my, rgba) = grab_monitor_at(cx, cy)?;
+    let (width, height) = rgba.dimensions();
 
     let png = rgba_to_png(&rgba)?;
     let capture_ms = t0.elapsed().as_millis();
@@ -141,6 +113,44 @@ fn rgba_to_png(img: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> Result<Vec<u8>, String> 
 fn base64_encode(bytes: &[u8]) -> String {
     use base64::{engine::general_purpose::STANDARD, Engine};
     STANDARD.encode(bytes)
+}
+
+/// `(monitor x, monitor y, image)` of the monitor containing (cx, cy) — xcap on Windows.
+#[cfg(not(target_os = "linux"))]
+fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
+    let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {e}"))?;
+    if monitors.is_empty() {
+        return Err("No monitors found for screen capture.".into());
+    }
+
+    let monitor = monitors
+        .into_iter()
+        .find(|m| {
+            let Ok(x) = m.x() else { return false };
+            let Ok(y) = m.y() else { return false };
+            let Ok(w) = m.width() else { return false };
+            let Ok(h) = m.height() else { return false };
+            cx >= x && cy >= y && cx < x + w as i32 && cy < y + h as i32
+        })
+        .or_else(|| {
+            // Fallback: primary / first monitor.
+            xcap::Monitor::all().ok().and_then(|mut m| m.drain(..).next())
+        })
+        .ok_or_else(|| "Could not find a monitor for capture.".to_string())?;
+
+    let mx = monitor.x().map_err(|e| format!("monitor.x: {e}"))?;
+    let my = monitor.y().map_err(|e| format!("monitor.y: {e}"))?;
+    let rgba = monitor
+        .capture_image()
+        .map_err(|e| format!("Screen capture failed: {e}"))?;
+    Ok((mx, my, rgba))
+}
+
+/// X11: RandR monitor + `GetImage` (platform/x11_capture.rs).
+#[cfg(target_os = "linux")]
+fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
+    let (mon, img) = crate::platform::x11_capture::grab_monitor_at(cx, cy)?;
+    Ok((mon.x, mon.y, img))
 }
 
 fn cursor_position() -> Result<(i32, i32), String> {

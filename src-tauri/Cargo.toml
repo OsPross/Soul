@@ -28,7 +28,6 @@ arboard = "3"
 thiserror = "2"
 parking_lot = "0.12"
 once_cell = "1"
-xcap = { version = "0.9", default-features = false }
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 window-vibrancy = "0.8.1"
@@ -45,6 +44,11 @@ rustpotter = "3.0.2"
 # rustpotter's candle-core 0.2 needs half on rand_distr 0.4 (half >= 2.5 moved to 0.5). Direct
 # pin so `cargo update` can't break the build.
 half = "=2.4.1"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+# Screen capture (Windows). Linux uses x11rb directly (platform/x11_capture.rs): xcap always links
+# PipeWire (libspa 0.10), which needs newer headers than Ubuntu 22.04 ships.
+xcap = { version = "0.9", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
@@ -68,11 +72,17 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "4", default-features = false, features = ["blocking"] }
+# MPRIS (island/media.rs). async-io = zbus's own executor behind the blocking API; without a runtime
+# feature zbus does not compile (it only built before because another crate enabled one).
+zbus = { version = "4", default-features = false, features = ["async-io"] }
 # XRecord: passive global key/button snooping for the Smart talk key on X11 (pure Rust).
-x11rb = { version = "0.13", features = ["record"] }
+x11rb = { version = "0.13", features = ["record", "randr"] }
 # nice() for the low-priority wake word thread (already in the tree via cpal/alsa).
 libc = "0.2"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 
 [profile.release]
 codegen-units = 1

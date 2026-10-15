@@ -29,7 +29,8 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `config.rs` – `Settings` struct, defaults, load/save (store file `soul-settings.json`), legacy migration,
   AltGr hotkey migration, `redact_settings` (use this for anything that leaves the backend).
 - `audio.rs` – mic capture (cpal) → 16 kHz mono WAV, mic monitor/level.
-- `capture.rs` – screen capture (xcap) for Circle-to-Ask. `ask.rs` – Ask flow/state machine.
+- `capture.rs` – screen capture for Circle-to-Ask: xcap on Windows; on Linux X11 `platform/x11_capture.rs` (x11rb RandR +
+  `GetImage`) — xcap always links PipeWire/libspa 0.10, which doesn't build against Ubuntu 22.04's PipeWire. `ask.rs` – Ask flow/state machine.
 - `ai/gemini.rs` – REST client: dictation, Ask, model listing, key test, system prompts, `normalize_model_id`.
 - `ai/live.rs` – Gemini Live API (WebSocket `BidiGenerateContent`) for dictation and commands: one async actor per
   feature on Tauri's tokio runtime (tokio-tungstenite + rustls), warm session, keepalive, reconnect/backoff, goAway,
@@ -49,6 +50,14 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `scenes.rs` – scenes (macros): validated step list (open_app/open_url/set_volume/media/youtube_play/web_search/delay/dnd),
   trigger phrases (checked before the router and in Smart classification), Island step chips, launch-based suggestions.
 - `timers.rs` – voice timers (ticker thread, `island://timers`, sound + toast + `agent::speak_notice` when done).
+- `updater.rs` – auto-update (tauri-plugin-updater, signed GitHub Releases). Check 30 s after start + every 6 h when
+  `auto_update`; channel `stable` = `releases/latest/download/latest.json`, `beta` = newest release incl. prereleases via
+  the GitHub API. Install kind from `tauri::utils::platform::bundle_type()`: NSIS/MSI/AppImage = `auto` (background
+  download, install only on click and only when `soul_is_busy` is false — no recording/speaking/Ask/busy), `.deb`/`.rpm`/dev
+  = `manual` (opens the release page). State → `soul://update` (`UpdateStatus`); frontend `src/lib/update.ts`
+  (`useUpdate`, `installUpdate` → `update_install` then `plugin-process` `relaunch()`). Island: once-per-version notice
+  stage + peek row („Nowa wersja vX.Y — Zainstaluj”), shown only while quiet; Settings → `AboutPage.tsx`.
+  `auto_update`/`update_channel` are owned by `update_save_config` (autosave) — `save_app_settings` keeps the stored values.
 - `talk.rs` – Smart talk key worker: hook events → gated capture (Live turn opens after 200 ms hold), tap / chord /
   double-tap (command mode) / talk+drag (Circle-to-Ask). `voice.rs` – cpal playback of Live 24 kHz reply audio,
   generation counter for barge-in, `soul://voice-level` for the Island waveform.
@@ -96,6 +105,21 @@ Test binaries have no Tauri comctl32 manifest — code reachable from a test mus
 (e.g. `audio::build_capture_stream` takes a `LevelEmitter` callback, not an `AppHandle`), or the test exe fails to load
 with `STATUS_ENTRYPOINT_NOT_FOUND`. On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
 `SOUL_DEBUG=1` enables verbose Island/media logs (`soul_debug!`).
+
+### Packaging / releases
+- Version: `package.json` is the source; `tauri.conf.json` has `"version": "../package.json"`; `npm run version:sync`
+  mirrors it into `Cargo.toml`/`Cargo.lock` (`scripts/version.mjs`; CI runs `version:check`). Never edit versions by hand.
+- Bundles (`tauri.conf.json`): NSIS (currentUser, EN+PL) + MSI, `.deb` + `.rpm` + `.AppImage`. Identifier `com.oskar.soul`
+  must never change — it names the app data dir (settings, `soul-memory.db`, `wakeword/`), which survives updates and
+  reinstalls (the NSIS uninstaller deletes it only if the user ticks the checkbox). Never store user data next to the exe.
+- Updater: public key + endpoint in `plugins.updater`; `src-tauri/tauri.release.conf.json` turns on
+  `createUpdaterArtifacts` (only CI / signed builds, so plain local `tauri build` works without the key). Private key:
+  `~/.tauri/soul-updater.key` (+ `.password`), GitHub secrets `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)` — never commit it.
+- `npm run release -- 0.2.0` (`scripts/release.mjs`): bump, CHANGELOG.md `[Unreleased]` → version, commit, tag; prints the
+  push. Tag `v*` → `.github/workflows/release.yml`: draft release → tauri-action builds (betas: NSIS only, MSI can't encode
+  `-beta`) → `scripts/latest-json.mjs` assembles `latest.json` once (notes from `scripts/changelog.mjs`). Publish the draft by hand.
+- `.github/workflows/ci.yml` (push/PR, windows-latest + ubuntu-22.04): version check, `npm run build`, `cargo check`,
+  `cargo clippy -D warnings`, unit tests. Linux deps: `scripts/ci-linux-deps.sh` (keep in sync when adding native deps).
 
 ## Models (Gemini)
 
@@ -175,7 +199,7 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
 
 - Rust logs use `eprintln!("[soul][module] message")`, where `module` is lowercase and matches the area:
   `agent`, `ask`, `audio`, `dictation`, `gemini`, `hook`, `island`, `live`, `memory`, `platform`, `quota`, `scene`, `sfx`, `timer`,
-  `voice`, `wake`, `watchdog`, `error`.
+  `update`, `voice`, `wake`, `watchdog`, `error`.
   Reuse an existing tag; add a new one only for a new subsystem.
 - Verbose/noisy diagnostics go through `soul_debug!` (needs `SOUL_DEBUG=1`).
 - Wrap potentially slow commands in `watchdog::Watch::start("name")`; it warns when work exceeds 200 ms.
@@ -200,4 +224,6 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
 5. **No arbitrary shell execution** in agent tools; only registered tools. Destructive tools (`close_app`) need user confirmation.
 6. Clipboard history must keep skipping secrets/password-like content; paste must restore the user's previous clipboard.
 7. Use `rustls-tls` for HTTPS (no native-tls). Keep new dependencies minimal and cross-platform.
-8. Keep `README.md` in sync when hotkeys, models or setup steps change.
+8. Keep `README.md` in sync when hotkeys, models, setup, install or release steps change; add user-visible changes to
+   `CHANGELOG.md` under `## [Unreleased]` (it becomes the release notes and the in-app changelog).
+9. Clippy must stay clean (`cargo clippy --all-targets -- -D warnings` runs in CI on Windows and Linux).

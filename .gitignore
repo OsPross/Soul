@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Updater signing key — never commit
+*.key
+*.key.password
+latest.json

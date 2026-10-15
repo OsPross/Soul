@@ -35,18 +35,14 @@ pub const DEFAULT_PERSONALITY: &str = "neutral";
 pub const DEFAULT_VOICE_VOLUME: u8 = 100;
 pub const DEFAULT_WAKE_SENSITIVITY: f32 = 0.5;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::enum_variant_names)]
 pub enum IslandPosition {
+    #[default]
     TopCenter,
     TopLeft,
     TopRight,
-}
-
-impl Default for IslandPosition {
-    fn default() -> Self {
-        Self::TopCenter
-    }
 }
 
 impl IslandPosition {
@@ -178,6 +174,13 @@ pub struct Settings {
     /// No wake word while a fullscreen app / game is focused.
     #[serde(default = "default_true")]
     pub wake_pause_in_games: bool,
+    /// Check for updates on startup + every 6 h and download them in the background.
+    /// Owned by `updater::update_save_config` (autosaved), kept by `save_app_settings`.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+    /// `stable` | `beta` (beta also offers prereleases).
+    #[serde(default = "default_update_channel")]
+    pub update_channel: String,
     /// Visual / animation preferences (accent, spirit, Island, animation config). Owned by the
     /// frontend (`src/anim/config.ts`); Rust only stores it and broadcasts `soul://appearance`.
     #[serde(default)]
@@ -221,6 +224,9 @@ fn default_voice_volume() -> u8 {
 fn default_wake_sensitivity() -> f32 {
     DEFAULT_WAKE_SENSITIVITY
 }
+fn default_update_channel() -> String {
+    crate::updater::CHANNEL_STABLE.to_string()
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -260,6 +266,8 @@ impl Default for Settings {
             wake_enabled: false,
             wake_sensitivity: DEFAULT_WAKE_SENSITIVITY,
             wake_pause_in_games: true,
+            auto_update: true,
+            update_channel: default_update_channel(),
             appearance: serde_json::Value::Null,
         }
     }
@@ -427,6 +435,8 @@ pub fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings, String>
         .map(|v| (v as f32).clamp(0.0, 1.0))
         .unwrap_or(DEFAULT_WAKE_SENSITIVITY);
     settings.wake_pause_in_games = bool_or("wakePauseInGames", true);
+    settings.auto_update = bool_or("autoUpdate", true);
+    settings.update_channel = crate::updater::normalize_channel(&str_or("updateChannel", crate::updater::CHANNEL_STABLE));
     if let Some(v) = store.get("appearance") {
         if v.is_object() {
             settings.appearance = v;
@@ -609,6 +619,8 @@ pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Res
         serde_json::Value::from(settings.wake_sensitivity.clamp(0.0, 1.0) as f64),
     );
     store.set("wakePauseInGames", serde_json::Value::Bool(settings.wake_pause_in_games));
+    store.set("autoUpdate", serde_json::Value::Bool(settings.auto_update));
+    store.set("updateChannel", serde_json::Value::String(settings.update_channel.clone()));
     if settings.appearance.is_object() {
         store.set("appearance", settings.appearance.clone());
     }
@@ -659,6 +671,8 @@ pub fn redact_settings(settings: &Settings) -> serde_json::Value {
         "wakeEnabled": settings.wake_enabled,
         "wakeSensitivity": settings.wake_sensitivity,
         "wakePauseInGames": settings.wake_pause_in_games,
+        "autoUpdate": settings.auto_update,
+        "updateChannel": settings.update_channel,
         "appearanceSet": settings.appearance.is_object(),
     })
 }

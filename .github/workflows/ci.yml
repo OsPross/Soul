@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: ./scripts/ci-linux-deps.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - name: Versions in sync (package.json / Cargo.toml)
+        run: npm run version:check
+
+      # tsc typecheck + vite build; the Rust build embeds ../dist, so this runs first.
+      - name: Frontend typecheck + build
+        run: npm run build
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Router + intent unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib 'agent::'
+
+      - name: All unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib

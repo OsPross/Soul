@@ -459,9 +459,7 @@ impl Worker {
         self.ignore_release = true;
         self.last_tap_up = None;
 
-        let state = self.app.state::<AppState>();
-        let active = ask::is_active(&state.ask);
-        drop(state);
+        let active = ask::is_active(&self.app.state::<AppState>().ask);
         if !active {
             if let Err(e) = ask::start_ask(&self.app) {
                 report_error(&self.app, e);

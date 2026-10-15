@@ -285,7 +285,7 @@ impl Platform for WindowsPlatform {
         // ACLineStatus: 0 = offline (battery), 1 = online, 255 = unknown.
         let on_battery = unsafe { GetSystemPowerStatus(&mut status) }
             .ok()
-            .and_then(|_| match status.ACLineStatus {
+            .and(match status.ACLineStatus {
                 0 => Some(true),
                 1 => Some(false),
                 _ => None,

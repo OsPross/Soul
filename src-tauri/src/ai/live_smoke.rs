@@ -54,7 +54,7 @@ pub(crate) fn tts_pcm16k_styled(text: &str, voice: &str, style: &str) -> Vec<u8>
         .unwrap_or(24_000);
     let raw = BASE64.decode(part["data"].as_str().unwrap()).unwrap();
     let samples: Vec<f32> = raw
-        .chunks_exact(2)
+        .as_chunks::<2>().0.iter()
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
         .collect();
     let ratio = rate as f64 / 16_000.0;

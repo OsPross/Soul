@@ -645,7 +645,7 @@ mod linux_mpris {
         // mpris:length is microseconds; Position is also microseconds.
         let duration_ms = metadata
             .get("mpris:length")
-            .and_then(|v| i64::try_from(v.clone()).ok())
+            .and_then(|v| i64::try_from(v).ok())
             .map(|us| (us.max(0) as u64) / 1000)
             .unwrap_or(0);
         let position_ms = proxy
@@ -678,17 +678,16 @@ mod linux_mpris {
         key: &str,
     ) -> String {
         map.get(key)
-            .and_then(|v| String::try_from(v.clone()).ok())
+            .and_then(|v| v.try_clone().ok())
+            .and_then(|v| String::try_from(v).ok())
             .unwrap_or_default()
     }
 
     fn artists_meta(map: &std::collections::HashMap<String, OwnedValue>) -> String {
         map.get("xesam:artist")
-            .and_then(|v| {
-                <Vec<String>>::try_from(v.clone())
-                    .ok()
-                    .map(|a| a.join(", "))
-            })
+            .and_then(|v| v.try_clone().ok())
+            .and_then(|v| <Vec<String>>::try_from(v).ok())
+            .map(|a| a.join(", "))
             .unwrap_or_default()
     }
 

@@ -10,6 +10,8 @@ mod linux_wayland;
 #[cfg(target_os = "linux")]
 mod linux_x11;
 #[cfg(target_os = "linux")]
+pub mod x11_capture;
+#[cfg(target_os = "linux")]
 mod x11_hook;
 #[cfg(target_os = "windows")]
 mod windows;
@@ -106,15 +108,16 @@ pub trait Platform: Send + Sync {
 pub fn create_platform() -> Arc<dyn Platform> {
     #[cfg(target_os = "windows")]
     {
-        return Arc::new(windows::WindowsPlatform::new());
+        Arc::new(windows::WindowsPlatform::new())
     }
 
     #[cfg(target_os = "linux")]
     {
         if is_wayland() {
-            return Arc::new(linux_wayland::LinuxWaylandPlatform::new());
+            Arc::new(linux_wayland::LinuxWaylandPlatform::new()) as Arc<dyn Platform>
+        } else {
+            Arc::new(linux_x11::LinuxX11Platform::new())
         }
-        return Arc::new(linux_x11::LinuxX11Platform::new());
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]

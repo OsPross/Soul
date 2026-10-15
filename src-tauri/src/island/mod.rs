@@ -447,7 +447,7 @@ pub fn sfx(app: &AppHandle, cue: &str) {
 /// Current track for "co gra?": (title, artist, playing), or None when nothing is available.
 pub fn now_playing_brief() -> Option<(String, String, bool)> {
     let np = media::cached_now_playing();
-    (np.available && !np.title.trim().is_empty()).then(|| (np.title, np.artist, np.playing))
+    (np.available && !np.title.trim().is_empty()).then_some((np.title, np.artist, np.playing))
 }
 
 /// Push recent notes to the Plans tab.
