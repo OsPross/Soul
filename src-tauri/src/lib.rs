@@ -9,6 +9,7 @@ mod island;
 mod memory;
 mod platform;
 mod scenes;
+mod secrets;
 mod talk;
 mod timers;
 mod updater;
@@ -80,6 +81,12 @@ struct ErrorLogPayload {
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<Settings, String> {
     load_settings(&app)
+}
+
+/// Where the Gemini key lives (Settings → Ogólne): `keychain` | `file` | `pending` + the store's name.
+#[tauri::command]
+fn api_key_storage() -> serde_json::Value {
+    serde_json::json!({ "storage": secrets::storage(), "store": secrets::store_name() })
 }
 
 /// Memory changed: the commands session prompt lists remembered facts — reconfigure it now (in the
@@ -635,6 +642,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
+            api_key_storage,
             save_app_settings,
             clear_model_notice,
             test_api_key,

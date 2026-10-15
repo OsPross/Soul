@@ -51,6 +51,10 @@ jobs:
       - name: Frontend typecheck + build
         run: npm run build
 
+      # Fails on any Gemini/Google API key (AIza… / AQ.…) in tracked files or the built frontend.
+      - name: Secret scan (source + dist)
+        run: node scripts/secret-scan.mjs --git dist
+
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets
 

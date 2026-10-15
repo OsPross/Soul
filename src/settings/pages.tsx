@@ -40,6 +40,10 @@ export function GeneralPage({ s }: P) {
   const { anim, update } = useAppearance();
   const { form, patch } = s;
   const hasKey = form.apiKey.trim().length > 0;
+  const [keyStore, setKeyStore] = useState<{ storage: string; store: string } | null>(null);
+  useEffect(() => {
+    invoke<{ storage: string; store: string }>("api_key_storage").then(setKeyStore).catch(() => undefined);
+  }, [form.apiKey]);
   return (
     <>
       <Card>
@@ -69,7 +73,19 @@ export function GeneralPage({ s }: P) {
 
       <Card
         title={tr(lang, "Klucz Gemini API", "Gemini API key")}
-        description={tr(lang, "Przechowywany lokalnie. Nigdy nie trafia do logów.", "Stored locally. Never written to logs.")}
+        description={
+          keyStore?.storage === "file"
+            ? tr(
+                lang,
+                "Brak systemowego magazynu haseł — klucz jest w pliku ustawień w folderze danych aplikacji. Nigdy nie trafia do logów.",
+                "No system credential store — the key is kept in the settings file in the app data folder. Never written to logs.",
+              )
+            : tr(
+                lang,
+                `Przechowywany lokalnie w: ${keyStore?.store ?? "magazyn poświadczeń systemu"}. Nigdy nie trafia do logów.`,
+                `Stored locally in ${keyStore?.store ?? "the system credential store"}. Never written to logs.`,
+              )
+        }
       >
         <div className="flex gap-2">
           <input
@@ -80,7 +96,7 @@ export function GeneralPage({ s }: P) {
             value={form.apiKey}
             onChange={(e) => patch({ apiKey: e.target.value })}
             onBlur={() => s.refreshModels(form.apiKey, form.model, form.fallbackModel)}
-            placeholder="AIza…"
+            placeholder="AIza… / AQ.…"
           />
           <Button onClick={() => void s.testKey()} disabled={s.testing || !form.apiKey}>
             {s.testing ? tr(lang, "Sprawdzam…", "Testing…") : tr(lang, "Testuj klucz", "Test key")}

@@ -51,6 +51,8 @@ half = "=2.4.1"
 xcap = { version = "0.9", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
+# Gemini API key in Windows Credential Manager (secrets.rs).
+keyring = { version = "3.6", features = ["windows-native"] }
 windows = { version = "0.58", features = [
   "Foundation",
   "Foundation_Collections",
@@ -72,6 +74,8 @@ windows = { version = "0.58", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# Gemini API key in the Secret Service (GNOME Keyring / KWallet) — pure Rust over zbus (secrets.rs).
+keyring = { version = "3.6", features = ["async-secret-service", "async-io", "crypto-rust"] }
 # MPRIS (island/media.rs). async-io = zbus's own executor behind the blocking API; without a runtime
 # feature zbus does not compile (it only built before because another crate enabled one).
 zbus = { version = "4", default-features = false, features = ["async-io"] }

@@ -155,14 +155,23 @@ the new release, a download progress bar and **Uruchom ponownie** (restart to in
 
 ### Your data
 
-Settings (`soul-settings.json`, incl. the API key), memory (`soul-memory.db`) and the trained wake word
-(`wakeword/`) live in the app data dir, never next to the program, so they survive updates and reinstalls:
+Settings (`soul-settings.json`), memory (`soul-memory.db`) and the trained wake word (`wakeword/`) live in
+the app data dir, never next to the program, so they survive updates and reinstalls:
 
 - Windows: `%APPDATA%\com.oskar.soul\`
 - Linux: `~/.local/share/com.oskar.soul/`
 
 The Windows uninstaller keeps them unless you tick **“Delete the application data”**; MSI, `.deb`, `.rpm`
 and the AppImage never touch them. To reset Soul completely, delete that folder.
+
+**Gemini API key:** kept in the OS credential store, not in the settings file — Windows **Credential Manager**
+(*Windows Credentials → `com.oskar.soul`*) or, on Linux, the Secret Service (GNOME Keyring / KWallet).
+A key saved in plain text by an older version is moved there on first start and removed from
+`soul-settings.json`. Only when no credential store is available (e.g. a Linux session without a keyring)
+does Soul fall back to the settings file, and Settings → Ogólne says so. Uninstalling never deletes the stored
+key; remove it in Credential Manager / Seahorse (or clear the key in Settings first). The key is never
+compiled into a build: CI (`scripts/secret-scan.mjs`) fails if an `AIza…` or `AQ.…` key appears in the
+source, the built frontend, the binary or the installers.
 
 ## Prerequisites (building from source)
 
@@ -302,8 +311,8 @@ src-tauri/src/
 
 ## Settings
 
-Stored locally in the app data dir as `soul-settings.json` (API key, hotkey, model, language) — see
-[Your data](#your-data). The API key is never written to logs.
+Stored locally in the app data dir as `soul-settings.json` (hotkeys, models, language…); the API key is in
+the OS credential store — see [Your data](#your-data). The API key is never written to logs.
 
 ## License
 

@@ -28,6 +28,13 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   overlay emit, error log (`push_error_log`/`report_error`), model validation/healing on startup.
 - `config.rs` – `Settings` struct, defaults, load/save (store file `soul-settings.json`), legacy migration,
   AltGr hotkey migration, `redact_settings` (use this for anything that leaves the backend).
+  `api_key` is NOT in the file: `load_api_key`/`save_api_key` go through `secrets.rs`.
+- `secrets.rs` – Gemini key in the OS credential store (`keyring`: Windows Credential Manager / Secret Service via zbus),
+  service `com.oskar.soul`, account `gemini-api-key`. Read once + cached (first read ≤ 2.5 s, else `Pending`) so
+  `load_settings` never blocks on it; a plaintext `apiKey` left in the file is migrated and deleted; no store →
+  file fallback (`storage()` = `file`, shown in Settings). `gemini::redact_secrets` also strips the cached key verbatim
+  plus every `AIza…` / `AQ.…` shape. Never read a key at build time (`env!`/`option_env!`/`import.meta.env`);
+  `scripts/secret-scan.mjs` enforces it in CI.
 - `audio.rs` – mic capture (cpal) → 16 kHz mono WAV, mic monitor/level.
 - `capture.rs` – screen capture for Circle-to-Ask: xcap on Windows; on Linux X11 `platform/x11_capture.rs` (x11rb RandR +
   `GetImage`) — xcap always links PipeWire/libspa 0.10, which doesn't build against Ubuntu 22.04's PipeWire. `ask.rs` – Ask flow/state machine.
@@ -199,7 +206,7 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
 
 - Rust logs use `eprintln!("[soul][module] message")`, where `module` is lowercase and matches the area:
   `agent`, `ask`, `audio`, `dictation`, `gemini`, `hook`, `island`, `live`, `memory`, `platform`, `quota`, `scene`, `sfx`, `timer`,
-  `update`, `voice`, `wake`, `watchdog`, `error`.
+  `secrets`, `update`, `voice`, `wake`, `watchdog`, `error`.
   Reuse an existing tag; add a new one only for a new subsystem.
 - Verbose/noisy diagnostics go through `soul_debug!` (needs `SOUL_DEBUG=1`).
 - Wrap potentially slow commands in `watchdog::Watch::start("name")`; it warns when work exceeds 200 ms.

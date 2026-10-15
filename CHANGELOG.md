@@ -6,6 +6,13 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+### Security
+
+- The Gemini API key is stored in the OS credential store (Windows Credential Manager, Linux Secret
+  Service) instead of `soul-settings.json`; an existing key is moved there automatically on first start.
+- Log/error redaction now also covers the newer `AQ.…` key format and every occurrence of a key.
+- CI fails if an API key appears in the source, the built frontend, the binary or the installers.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added

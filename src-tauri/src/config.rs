@@ -302,11 +302,10 @@ pub fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings, String>
         .store(STORE_PATH)
         .map_err(|e| format!("Failed to open settings store: {e}"))?;
 
-    let mut settings = Settings::default();
-
-    if let Some(v) = store.get("apiKey") {
-        settings.api_key = v.as_str().unwrap_or_default().to_string();
-    }
+    let mut settings = Settings {
+        api_key: load_api_key(&store),
+        ..Settings::default()
+    };
     if let Some(v) = store.get("hotkey") {
         settings.hotkey = v.as_str().unwrap_or(DEFAULT_HOTKEY).to_string();
     }
@@ -516,12 +515,59 @@ pub fn is_ctrl_alt_letter_hotkey(hotkey: &str) -> bool {
     has(&["ctrl"]) && has(&["alt", "option"]) && !has(&["super"]) && has_key
 }
 
+/// API key: OS credential store (`secrets.rs`). A plaintext `apiKey` left in the settings file
+/// (older versions, or a session without a credential store) is newer by construction — we only
+/// write it there when the store failed — so it is moved into the store and deleted from the file.
+fn load_api_key<R: Runtime>(store: &tauri_plugin_store::Store<R>) -> String {
+    let file_key = store
+        .get("apiKey")
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .unwrap_or_default();
+    match crate::secrets::load() {
+        crate::secrets::Lookup::Pending | crate::secrets::Lookup::Unavailable(_) => file_key,
+        found if file_key.is_empty() => match found {
+            crate::secrets::Lookup::Found(k) => k,
+            _ => String::new(),
+        },
+        _ => match crate::secrets::store(&file_key) {
+            Ok(()) => {
+                store.delete("apiKey");
+                match store.save() {
+                    Ok(()) => eprintln!(
+                        "[soul][secrets] moved the API key from {STORE_PATH} to {}",
+                        crate::secrets::store_name()
+                    ),
+                    Err(e) => eprintln!("[soul][secrets] key stored, but removing it from {STORE_PATH} failed: {e}"),
+                }
+                file_key
+            }
+            Err(e) => {
+                eprintln!("[soul][secrets] keeping the API key in {STORE_PATH}: {e}");
+                file_key
+            }
+        },
+    }
+}
+
+/// Credential store first; the settings file only when there is no usable store.
+fn save_api_key<R: Runtime>(store: &tauri_plugin_store::Store<R>, key: &str) {
+    match crate::secrets::store(key) {
+        Ok(()) => {
+            store.delete("apiKey");
+        }
+        Err(e) => {
+            eprintln!("[soul][secrets] credential store unavailable, saving the API key in {STORE_PATH}: {e}");
+            store.set("apiKey", serde_json::Value::String(key.trim().to_string()));
+        }
+    }
+}
+
 pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Result<(), String> {
     let store = app
         .store(STORE_PATH)
         .map_err(|e| format!("Failed to open settings store: {e}"))?;
 
-    store.set("apiKey", serde_json::Value::String(settings.api_key.clone()));
+    save_api_key(&store, &settings.api_key);
     store.set("hotkey", serde_json::Value::String(settings.hotkey.clone()));
     store.set(
         "askHotkey",

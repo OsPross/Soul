@@ -113,6 +113,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Secret scan (source)
+        run: node scripts/secret-scan.mjs --git
+
       - name: Build, sign and upload installers
         uses: tauri-apps/tauri-action@v0
         env:
@@ -124,6 +127,12 @@ jobs:
           # latest.json is assembled once by the next job (parallel jobs would race on it).
           includeUpdaterJson: false
           args: --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}
+
+      # Defense in depth: the shipped binary, frontend and installers must not contain a key. A hit
+      # fails the run before latest.json exists, so the draft can't reach users; delete it.
+      - name: Secret scan (build output)
+        shell: bash
+        run: node scripts/secret-scan.mjs dist src-tauri/target/release/soul src-tauri/target/release/soul.exe src-tauri/target/release/bundle
 
   updater-manifest:
     needs: [create-release, build]

@@ -1611,16 +1611,74 @@ fn format_reqwest_error(
     redact_secrets(&parts.join(" | "))
 }
 
+/// Strip API keys from text that may leave the backend (logs, errors, events): the configured key
+/// verbatim, any Google key shape (`AIza…` and the newer `AQ.…`, every occurrence) and `key=` values.
 pub(crate) fn redact_secrets(text: &str) -> String {
-    let mut out = text.replace("key=", "key=[redacted]");
-    if let Some(idx) = out.find("AIza") {
-        let end = out[idx..]
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
-            .map(|i| idx + i)
-            .unwrap_or(out.len());
-        out.replace_range(idx..end, "[redacted-api-key]");
+    let mut out = text.to_string();
+    if let Some(key) = crate::secrets::cached_key().filter(|k| k.len() >= 8) {
+        out = out.replace(&key, "[redacted-api-key]");
+    }
+    redact_key_shapes(&out)
+}
+
+fn redact_key_shapes(text: &str) -> String {
+    let is_key_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.';
+    // (prefix, minimum characters after it) — long enough that "FAQ.html" or "AIzawa" survive.
+    const SHAPES: [(&str, usize); 2] = [("AIza", 30), ("AQ.", 30)];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    'outer: while !rest.is_empty() {
+        // `key=<value>` (query strings, form bodies).
+        if let Some(after) = rest.strip_prefix("key=") {
+            let n = after.find(|c: char| !is_key_char(c)).unwrap_or(after.len());
+            out.push_str("key=");
+            if n > 0 {
+                out.push_str("[redacted]");
+            }
+            rest = &after[n..];
+            continue;
+        }
+        let at_boundary = out.chars().last().is_none_or(|c| !is_key_char(c));
+        if at_boundary {
+            for (prefix, min) in SHAPES {
+                if let Some(after) = rest.strip_prefix(prefix) {
+                    let n = after.find(|c: char| !is_key_char(c)).unwrap_or(after.len());
+                    if n >= min {
+                        out.push_str("[redacted-api-key]");
+                        rest = &after[n..];
+                        continue 'outer;
+                    }
+                }
+            }
+        }
+        let c = rest.chars().next().unwrap_or_default();
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
     }
     out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_key_shapes;
+
+    #[test]
+    fn redacts_every_key_shape_and_query_value() {
+        let aiza = format!("AIza{}", "x".repeat(35));
+        let aq = format!("AQ.{}", "Ab3_-".repeat(10));
+        let text = format!("a {aiza} b \"{aq}\" c ?key={aq}&alt=json d {aiza}");
+        let out = redact_key_shapes(&text);
+        assert!(!out.contains("AIza") && !out.contains("AQ."), "{out}");
+        assert_eq!(out.matches("[redacted-api-key]").count(), 3);
+        assert!(out.contains("?key=[redacted]&alt=json"));
+    }
+
+    #[test]
+    fn leaves_ordinary_text_and_polish_alone() {
+        for s in ["see FAQ.html", "AIzawa", "key=", "Otwórz Spotify — zażółć gęślą jaźń", "AQ.short"] {
+            assert_eq!(redact_key_shapes(s), s);
+        }
+    }
 }
 
 fn is_audio_capable_model(id: &str) -> bool {
