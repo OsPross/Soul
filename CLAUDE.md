@@ -77,7 +77,8 @@ npm run build         # tsc + vite build (frontend typecheck)
 cargo check --manifest-path src-tauri/Cargo.toml   # fast Rust check
 ```
 Unit tests: `cargo test --manifest-path src-tauri/Cargo.toml --lib`. Live end-to-end (real API, Polish TTS):
-`SOUL_TEST_KEY=<key> cargo test --manifest-path src-tauri/Cargo.toml --lib live_smoke -- --ignored --nocapture`. On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
+`SOUL_TEST_KEY=<key> cargo test --manifest-path src-tauri/Cargo.toml --lib live_smoke -- --ignored --nocapture`. Voice regression (real WAVs in `tests/voice/`, tools dry-run, writes `tests/voice/report.md`): `SOUL_TEST_KEY=<key> npm run test:voice`
+(`voice_regression.rs`; `voice_synth.rs` = TTS samples, `dev_samples.rs` = Settings recorder; `SOUL_DRY_RUN=1` = agent tools logged, not run). On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
 `SOUL_DEBUG=1` enables verbose Island/media logs (`soul_debug!`).
 
 ## Models (Gemini)

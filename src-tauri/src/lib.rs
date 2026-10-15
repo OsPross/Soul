@@ -4,6 +4,7 @@ mod ask;
 mod audio;
 mod capture;
 mod config;
+mod dev_samples;
 mod island;
 mod memory;
 mod platform;
@@ -11,6 +12,10 @@ mod scenes;
 mod talk;
 mod timers;
 mod voice;
+#[cfg(test)]
+mod voice_regression;
+#[cfg(test)]
+mod voice_synth;
 
 use ai::gemini::{
     is_retired_id, model_available, normalize_model_id, pick_default_fallback,
@@ -616,6 +621,9 @@ pub fn run() {
             list_microphones,
             start_mic_monitor,
             stop_mic_monitor,
+            dev_samples::voice_sample_start,
+            dev_samples::voice_sample_stop,
+            dev_samples::voice_sample_cancel,
             ask_start,
             ask_cancel,
             ask_region_selected,

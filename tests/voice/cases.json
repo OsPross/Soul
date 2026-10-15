@@ -1,0 +1,10 @@
+[
+  {
+    "file": "nastepna.wav",
+    "expect": { "route": "command", "tool": "media_control", "args": { "action": "next" } }
+  },
+  {
+    "file": "dyktowanie_faktura.wav",
+    "expect": { "route": "dictation", "text_contains": "faktur" }
+  }
+]

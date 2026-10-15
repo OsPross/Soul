@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
-const TTS_MODEL: &str = "gemini-3.8-flash-lite-tts";
+pub(crate) const TTS_MODEL: &str = "gemini-3.8-flash-lite-tts";
 
 fn key() -> String {
     std::env::var("SOUL_TEST_KEY").expect("set SOUL_TEST_KEY")
@@ -18,11 +18,16 @@ fn key() -> String {
 
 /// Polish TTS → 16 kHz s16le mono PCM.
 fn tts_pcm16k(text: &str) -> Vec<u8> {
+    tts_pcm16k_styled(text, "Kore", "Powiedz naturalnie po polsku")
+}
+
+/// TTS with a prebuilt voice and a spoken style instruction ("Powiedz szybko po polsku").
+pub(crate) fn tts_pcm16k_styled(text: &str, voice: &str, style: &str) -> Vec<u8> {
     let body = json!({
-        "contents": [{ "parts": [{ "text": format!("Powiedz naturalnie po polsku: {text}") }] }],
+        "contents": [{ "parts": [{ "text": format!("{style}: {text}") }] }],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
-            "speechConfig": { "voiceConfig": { "prebuiltVoiceConfig": { "voiceName": "Kore" } } }
+            "speechConfig": { "voiceConfig": { "prebuiltVoiceConfig": { "voiceName": voice } } }
         }
     });
     let url = format!(

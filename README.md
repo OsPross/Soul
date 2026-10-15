@@ -67,6 +67,20 @@ Circle-to-Ask captures the monitor under the cursor (`xcap`), dims it, lets you 
 
 `close_app` asks for Confirm/Cancel on an Island card (Esc = Cancel). While a command runs, the Island shows animated tool chips (Otwieram, Głośność…). No arbitrary shell — only the registered tools. Watch the console for `[soul][agent] tool_call` / `tool_result` logs.
 
+### Voice regression tests
+
+`tests/voice/` holds WAV samples + `cases.json` (expected route / tool / args / text). The harness streams each
+sample through the real Smart pipeline (Live transcription → smart router → pre-router / Live / REST tools) with
+tools in **dry-run** and writes `tests/voice/report.md` (file | transcript | route | tool+args | expected | PASS/FAIL | latency).
+
+```bash
+SOUL_TEST_KEY=<key> npm run test:voice
+SOUL_TEST_KEY=<key> npm run test:voice:synth   # optional: synthetic Polish samples via Gemini TTS (synth.json)
+```
+
+Record real samples in a dev build: Settings → Zaawansowane → *Nagraj próbkę testową*. Details: `tests/voice/README.md`.
+`SOUL_DRY_RUN=1` makes the running app log agent tools instead of executing them.
+
 ### Dynamic Island — how to test
 
 The Island is a frameless always-on-top pill at the top of the **primary** monitor (replaces the old floating status overlay when enabled).

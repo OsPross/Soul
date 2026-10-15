@@ -1066,6 +1066,21 @@ fn shorten(s: &str, max: usize) -> String {
     }
 }
 
+/// `SOUL_DRY_RUN=1`: tools are logged, never executed (pipeline checks without side effects).
+pub(crate) fn dry_run() -> bool {
+    static DRY_RUN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DRY_RUN.get_or_init(|| {
+        std::env::var("SOUL_DRY_RUN").is_ok_and(|v| !v.is_empty() && v != "0")
+    })
+}
+
+/// Deterministic route (scene trigger / pre-router) for `text` without executing it:
+/// `(tool, args, reason)`. Used by the voice regression harness.
+#[cfg(test)]
+pub(crate) fn preview_route(text: &str) -> Option<(String, Value, String)> {
+    local_route(text).map(|r| (r.tool, r.args, r.reason))
+}
+
 /// Runs a registered tool and mirrors its lifecycle as an Island tool chip.
 fn execute_tool(
     app: &AppHandle,
@@ -1073,6 +1088,10 @@ fn execute_tool(
     name: &str,
     args: &Value,
 ) -> Result<String, String> {
+    if dry_run() {
+        eprintln!("[soul][agent] dry_run tool={name} args={args} (not executed)");
+        return Ok(format!("dry-run: {name} was not executed"));
+    }
     // `answer` is a spoken reply, not an action — no chip.
     let chip = name != "answer";
     if chip {

@@ -692,11 +692,143 @@ export function IslandPage({ s }: P) {
 }
 
 // ───────────────────────────── Zaawansowane ─────────────────────────────
+type SampleRoute = "none" | "command" | "dictation";
+
+/** Dev only: record a voice regression sample into tests/voice/ (see voice_regression.rs). */
+function VoiceSampleCard() {
+  const lang = useLang();
+  const [name, setName] = useState("");
+  const [route, setRoute] = useState<SampleRoute>("command");
+  const [device, setDevice] = useState<string | null>(null);
+  const [startedAt, setStartedAt] = useState(0);
+  const [, setTick] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
+  const recording = device !== null;
+
+  useEffect(() => {
+    if (!recording) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 250);
+    return () => window.clearInterval(id);
+  }, [recording]);
+
+  // Leaving the page mid-take must not leave the mic open.
+  const recordingRef = useRef(false);
+  recordingRef.current = recording;
+  useEffect(() => () => void (recordingRef.current && invoke("voice_sample_cancel")), []);
+
+  const start = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      setDevice(await invoke<string>("voice_sample_start"));
+      setStartedAt(Date.now());
+    } catch (e) {
+      setStatus({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const stop = async () => {
+    setBusy(true);
+    try {
+      const path = await invoke<string>("voice_sample_stop", {
+        name,
+        route: route === "none" ? null : route,
+      });
+      setDevice(null);
+      setStatus({ ok: true, text: tr(lang, `Zapisano: ${path}`, `Saved: ${path}`) });
+      setName("");
+    } catch (e) {
+      // Invalid name: still recording, fix the name and press Stop again.
+      setStatus({ ok: false, text: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = async () => {
+    await invoke("voice_sample_cancel");
+    setDevice(null);
+  };
+
+  const seconds = recording ? ((Date.now() - startedAt) / 1000).toFixed(1) : null;
+  return (
+    <Card
+      title={tr(lang, "Próbki testów głosowych (dev)", "Voice test samples (dev)")}
+      description={tr(
+        lang,
+        "Nagrywa z wybranego mikrofonu do tests/voice/ i dopisuje przypadek do cases.json. Uruchom: npm run test:voice.",
+        "Records from the selected microphone into tests/voice/ and adds a case to cases.json. Run: npm run test:voice.",
+      )}
+    >
+      <Row
+        label={tr(lang, "Nazwa pliku", "File name")}
+        hint={tr(lang, "np. nastepna albo dyktowanie_faktura", "e.g. nastepna or dyktowanie_faktura")}
+      >
+        <input
+          className="soul-input w-[220px] px-3 py-2 text-[13px]"
+          value={name}
+          spellCheck={false}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="nastepna"
+        />
+      </Row>
+      <Row label={tr(lang, "Oczekiwana ścieżka", "Expected route")}>
+        <Segmented<SampleRoute>
+          size="sm"
+          value={route}
+          onChange={setRoute}
+          options={[
+            { value: "command", label: tr(lang, "Komenda", "Command") },
+            { value: "dictation", label: tr(lang, "Dyktowanie", "Dictation") },
+            { value: "none", label: tr(lang, "Brak", "None") },
+          ]}
+        />
+      </Row>
+      <Row
+        label={
+          recording
+            ? tr(lang, `Nagrywanie… ${seconds} s`, `Recording… ${seconds} s`)
+            : tr(lang, "Nagraj próbkę testową", "Record test sample")
+        }
+        hint={
+          recording
+            ? device
+            : tr(lang, "Nie używaj klawisza mowy podczas nagrywania.", "Don't use the talk key while recording.")
+        }
+      >
+        <div className="flex gap-2">
+          {recording && (
+            <Button onClick={cancel} disabled={busy}>
+              {tr(lang, "Anuluj", "Cancel")}
+            </Button>
+          )}
+          <Button
+            variant={recording ? "danger" : "primary"}
+            onClick={recording ? stop : start}
+            disabled={busy || (recording && name.trim() === "")}
+          >
+            {recording ? tr(lang, "Zatrzymaj i zapisz", "Stop & save") : tr(lang, "Nagraj", "Record")}
+          </Button>
+        </div>
+      </Row>
+      {status && (
+        <p
+          className={`select-text break-all text-[12px] ${status.ok ? "text-[var(--soul-muted)]" : "text-[var(--soul-danger)]"}`}
+        >
+          {status.text}
+        </p>
+      )}
+    </Card>
+  );
+}
+
 export function AdvancedPage({ s }: P) {
   const lang = useLang();
   const { anim, update } = useAppearance();
   return (
     <>
+      {import.meta.env.DEV && <VoiceSampleCard />}
       <Card
         title={tr(lang, "Dziennik błędów", "Error log")}
         action={
