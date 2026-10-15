@@ -6,6 +6,8 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-15
+
 ### Fixed
 
 - Windows: no more console window flashing on voice commands („włącz Spotify”, „włącz muzykę”),
