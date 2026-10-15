@@ -4,8 +4,14 @@ use std::sync::Arc;
 
 pub mod apps;
 pub mod close;
+pub mod coords;
 pub mod hook;
+pub mod input;
+pub mod marks;
+pub mod ui;
 
+#[cfg(target_os = "linux")]
+mod linux_atspi;
 #[cfg(target_os = "linux")]
 mod linux_wayland;
 #[cfg(target_os = "linux")]
@@ -18,6 +24,8 @@ mod x11_hook;
 mod windows;
 #[cfg(target_os = "windows")]
 mod windows_hook;
+#[cfg(target_os = "windows")]
+mod windows_uia;
 
 /// Hints for the animation battery saver. `None` = unknown on this platform.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -121,6 +129,49 @@ pub trait Platform: Send + Sync {
 
     /// Send the app's own undo (Ctrl+Z) to the focused window.
     fn send_undo(&self) -> Result<(), String>;
+
+    // ── Computer agent (docs/agent.md). All blocking and bounded; worker threads only. ──
+
+    /// Interactive elements of the focused app window (accessibility tree), ids numbered.
+    fn ui_snapshot(&self, opts: &ui::SnapshotOptions) -> Result<ui::UiSnapshot, String>;
+
+    /// Pattern-level operation on element `id` of snapshot `gen` (no synthetic input).
+    /// `Err(ui STALE)` when `gen` is outdated — the caller falls back to coordinates.
+    fn ui_element_op(&self, gen: u64, id: u32, op: &ui::ElementOp) -> Result<(), String>;
+
+    /// Cheap read (foreground window, focused element, the target's value/state) for settling.
+    fn ui_quick_state(&self, gen: u64, target: Option<u32>) -> Result<ui::QuickState, String>;
+
+    /// The app window the agent would act on (no tree walk).
+    fn foreground_window(&self) -> Option<ui::WindowInfo>;
+
+    /// One synthetic input event; sequences go through `input::execute` (abort + release).
+    fn send_input_step(&self, step: &input::InputStep) -> Result<(), String>;
+
+    /// Kill switch: Escape held + cursor position. Called every ~25 ms; must be cheap.
+    fn input_probe(&self) -> input::InputProbe;
+
+    /// Monitors in physical pixels with their scale factors.
+    fn monitors(&self) -> Vec<coords::Monitor>;
+
+    /// Keep one of Soul's windows out of screen captures during a task. Best effort.
+    fn exclude_from_capture(&self, _window_id: u64, _on: bool) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[allow(dead_code)] // TEMP(phase 1)
+/// Native id of a Tauri window (HWND on Windows) for `exclude_from_capture` / `activate_window`.
+pub fn native_window_id(win: &tauri::WebviewWindow) -> Option<u64> {
+    #[cfg(target_os = "windows")]
+    {
+        win.hwnd().ok().map(|h| h.0 as usize as u64)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = win;
+        None
+    }
 }
 
 pub fn create_platform() -> Arc<dyn Platform> {

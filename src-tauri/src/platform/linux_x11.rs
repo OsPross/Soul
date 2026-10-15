@@ -384,6 +384,34 @@ impl Platform for LinuxX11Platform {
     fn configure_input_hook(&self, config: super::hook::HookConfig) {
         super::x11_hook::configure(config);
     }
+
+    fn ui_snapshot(&self, opts: &super::ui::SnapshotOptions) -> Result<super::ui::UiSnapshot, String> {
+        super::linux_atspi::snapshot(*opts)
+    }
+
+    fn ui_element_op(&self, gen: u64, id: u32, op: &super::ui::ElementOp) -> Result<(), String> {
+        super::linux_atspi::element_op(gen, id, op)
+    }
+
+    fn ui_quick_state(&self, gen: u64, target: Option<u32>) -> Result<super::ui::QuickState, String> {
+        super::linux_atspi::quick_state(gen, target)
+    }
+
+    fn foreground_window(&self) -> Option<super::ui::WindowInfo> {
+        super::linux_atspi::foreground_window()
+    }
+
+    fn send_input_step(&self, step: &super::input::InputStep) -> Result<(), String> {
+        super::linux_atspi::send_step(step)
+    }
+
+    fn input_probe(&self) -> super::input::InputProbe {
+        super::linux_atspi::probe()
+    }
+
+    fn monitors(&self) -> Vec<super::coords::Monitor> {
+        super::linux_atspi::monitors()
+    }
 }
 
 /// Cached X connection + the three EWMH atoms (connecting every poll is wasteful).

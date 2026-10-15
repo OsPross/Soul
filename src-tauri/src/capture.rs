@@ -117,7 +117,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 /// `(monitor x, monitor y, image)` of the monitor containing (cx, cy) — xcap on Windows.
 #[cfg(not(target_os = "linux"))]
-fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
+pub(crate) fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
     let monitors = xcap::Monitor::all().map_err(|e| format!("Failed to list monitors: {e}"))?;
     if monitors.is_empty() {
         return Err("No monitors found for screen capture.".into());
@@ -148,7 +148,7 @@ fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), Str
 
 /// X11: RandR monitor + `GetImage` (platform/x11_capture.rs).
 #[cfg(target_os = "linux")]
-fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
+pub(crate) fn grab_monitor_at(cx: i32, cy: i32) -> Result<(i32, i32, image::RgbaImage), String> {
     let (mon, img) = crate::platform::x11_capture::grab_monitor_at(cx, cy)?;
     Ok((mon.x, mon.y, img))
 }

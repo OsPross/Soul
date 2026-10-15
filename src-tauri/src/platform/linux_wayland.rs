@@ -263,4 +263,38 @@ impl Platform for LinuxWaylandPlatform {
     }
 
     fn configure_input_hook(&self, _config: super::hook::HookConfig) {}
+
+    // Computer agent: Wayland gives no global input injection, window list or screen capture to
+    // ordinary clients — refuse clearly instead of acting blind.
+    fn ui_snapshot(&self, _opts: &super::ui::SnapshotOptions) -> Result<super::ui::UiSnapshot, String> {
+        Err(WAYLAND_AGENT.into())
+    }
+
+    fn ui_element_op(&self, _gen: u64, _id: u32, _op: &super::ui::ElementOp) -> Result<(), String> {
+        Err(WAYLAND_AGENT.into())
+    }
+
+    fn ui_quick_state(&self, _gen: u64, _target: Option<u32>) -> Result<super::ui::QuickState, String> {
+        Err(WAYLAND_AGENT.into())
+    }
+
+    fn foreground_window(&self) -> Option<super::ui::WindowInfo> {
+        None
+    }
+
+    fn send_input_step(&self, _step: &super::input::InputStep) -> Result<(), String> {
+        Err(WAYLAND_AGENT.into())
+    }
+
+    fn input_probe(&self) -> super::input::InputProbe {
+        super::input::InputProbe::default()
+    }
+
+    fn monitors(&self) -> Vec<super::coords::Monitor> {
+        Vec::new()
+    }
 }
+
+/// Shown when the computer agent is asked to work on Wayland.
+pub(super) const WAYLAND_AGENT: &str =
+    "Sterowanie komputerem nie działa na Wayland — zaloguj się do sesji X11 (Soul Agent is not supported on Wayland; use an X11 session).";

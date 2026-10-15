@@ -196,7 +196,7 @@ fn process_snapshot() -> (Vec<close::Proc>, Vec<TopWindow>) {
     (procs, windows)
 }
 
-fn process_path(pid: u32) -> Option<String> {
+pub(super) fn process_path(pid: u32) -> Option<String> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
@@ -808,6 +808,38 @@ public class SoulMedia {{
 
     fn configure_input_hook(&self, config: super::hook::HookConfig) {
         super::windows_hook::configure(config);
+    }
+
+    fn ui_snapshot(&self, opts: &super::ui::SnapshotOptions) -> Result<super::ui::UiSnapshot, String> {
+        super::windows_uia::snapshot(*opts)
+    }
+
+    fn ui_element_op(&self, gen: u64, id: u32, op: &super::ui::ElementOp) -> Result<(), String> {
+        super::windows_uia::element_op(gen, id, op.clone())
+    }
+
+    fn ui_quick_state(&self, gen: u64, target: Option<u32>) -> Result<super::ui::QuickState, String> {
+        super::windows_uia::quick_state(gen, target)
+    }
+
+    fn foreground_window(&self) -> Option<super::ui::WindowInfo> {
+        super::windows_uia::foreground_window()
+    }
+
+    fn send_input_step(&self, step: &super::input::InputStep) -> Result<(), String> {
+        super::windows_uia::send_step(step)
+    }
+
+    fn input_probe(&self) -> super::input::InputProbe {
+        super::windows_uia::probe()
+    }
+
+    fn monitors(&self) -> Vec<super::coords::Monitor> {
+        super::windows_uia::monitors()
+    }
+
+    fn exclude_from_capture(&self, window_id: u64, on: bool) -> Result<(), String> {
+        super::windows_uia::exclude_from_capture(window_id, on)
     }
 }
 
