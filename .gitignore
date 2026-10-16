@@ -27,3 +27,6 @@ dist-ssr
 *.key
 *.key.password
 latest.json
+
+graphify-out/
+.claude/
