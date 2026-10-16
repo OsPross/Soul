@@ -1,5 +1,6 @@
 /**
- * Collapsed-mode content. Priority: confirm > text result > timer toast > live activity >
+ * Collapsed-mode content. Priority: confirm / agent question > text result > running agent task >
+ * timer toast > live activity >
  * toast > update notice > caption > music > idle. A pending confirmation always wins and holds
  * the card: hover never turns it into peek and nothing expands it until it is answered.
  * `stage` = big live-activity card, `compact` = same info squeezed into the pill (quiet mode
@@ -7,7 +8,7 @@
  *
  * Pure (no imports) so `tests/ui/stage.test.ts` can run it under plain Node.
  */
-export type Stage = "confirm" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
+export type Stage = "confirm" | "question" | "agent" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
 
 export interface StageInput {
   /** Assistant banner state currently shown (`idle`, `listening`, `confirm`, `done`, …). */
@@ -20,11 +21,15 @@ export interface StageInput {
   showCaption: boolean;
   updateNotice: boolean;
   mediaActive: boolean;
+  /** A computer-agent task is running (`island://agent`, phase running). */
+  agent?: boolean;
 }
 
 export function pickStage(i: StageInput): Stage {
   if (i.state === "confirm") return "confirm";
+  if (i.state === "question") return "question";
   if (i.textResult) return "result";
+  if (i.agent) return "agent";
   if (i.toastKind === "timer") return "toast";
   const active = i.state !== "idle";
   if (active && !(i.state === "done" && i.kind === "dictation" && i.showCaption)) {
@@ -39,10 +44,16 @@ export function pickStage(i: StageInput): Stage {
 
 /** Cards with buttons stay put: hover does not peek, wheel/click do not expand. */
 export function holdsCard(stage: Stage, toastHasAction: boolean): boolean {
-  return stage === "confirm" || stage === "result" || (stage === "toast" && toastHasAction);
+  return (
+    stage === "confirm" ||
+    stage === "question" ||
+    stage === "agent" ||
+    stage === "result" ||
+    (stage === "toast" && toastHasAction)
+  );
 }
 
 /** A confirmation arriving while the Island is open (peek / expanded) collapses it onto the card. */
 export function mustCollapseFor(stage: Stage, mode: "collapsed" | "peek" | "expanded"): boolean {
-  return stage === "confirm" && mode !== "collapsed";
+  return (stage === "confirm" || stage === "question" || stage === "agent") && mode !== "collapsed";
 }

@@ -32,11 +32,11 @@ export const tokens = {
   accentDefault: "#7cf2c8",
 } as const;
 
-export type ModeKind = "dictation" | "command" | "ask";
+export type ModeKind = "dictation" | "command" | "ask" | "agent";
 
 export function accentFor(kind: ModeKind | null | undefined, fallback: string): string {
   if (kind === "dictation") return tokens.accentDictation;
-  if (kind === "command") return tokens.accentCommand;
+  if (kind === "command" || kind === "agent") return tokens.accentCommand;
   if (kind === "ask") return tokens.accentAsk;
   return fallback;
 }

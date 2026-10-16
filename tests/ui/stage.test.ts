@@ -60,3 +60,18 @@ test("the rest of the order is unchanged", () => {
   assert.equal(pickStage({ ...quiet, toastKind: "memory", updateNotice: true }), "toast");
   assert.equal(pickStage({ ...quiet, updateNotice: true, mediaActive: true }), "update");
 });
+
+test("a running agent task shows its card; its confirmation and question win over it", () => {
+  const running: StageInput = { ...quiet, state: "thinking", kind: "agent", agent: true, mediaActive: true };
+  assert.equal(pickStage(running), "agent");
+  assert.equal(pickStage({ ...running, state: "confirm" }), "confirm");
+  assert.equal(pickStage({ ...running, state: "question" }), "question");
+  assert.equal(pickStage({ ...running, toastKind: "timer" }), "agent");
+  // The Stop button / answer card hold: no peek on hover, and an open Island folds back.
+  assert.equal(holdsCard("agent", false), true);
+  assert.equal(holdsCard("question", false), true);
+  assert.equal(mustCollapseFor("agent", "expanded"), true);
+  assert.equal(mustCollapseFor("question", "peek"), true);
+  // Task over → the usual result stage.
+  assert.equal(pickStage({ ...running, agent: false, state: "done" }), "stage");
+});

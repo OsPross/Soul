@@ -19,6 +19,7 @@ import {
 import { AdvancedPage, GeneralPage, HotkeysPage, IslandPage, MicPage, ModelsPage, VoicePage } from "./pages";
 import AppearancePage from "./AppearancePage";
 import AboutPage from "./AboutPage";
+import AgentPage from "./AgentPage";
 import { getVersion } from "@tauri-apps/api/app";
 import { MemoryPage, ScenesPage } from "./MemoryScenes";
 import { Button } from "./ui";
@@ -31,6 +32,7 @@ export type PageId =
   | "voice"
   | "memory"
   | "scenes"
+  | "agent"
   | "island"
   | "appearance"
   | "advanced"
@@ -68,6 +70,7 @@ const NAV: { id: PageId; pl: string; en: string; icon: string }[] = [
   { id: "voice", pl: "Głos i dusza", en: "Voice & soul", icon: "M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" },
   { id: "memory", pl: "Pamięć", en: "Memory", icon: "M9 4a3 3 0 0 0-3 3v.5A3 3 0 0 0 4 10.3 3 3 0 0 0 5 15a3 3 0 0 0 4 4.5V4zm6 0a3 3 0 0 1 3 3v.5a3 3 0 0 1 2 2.8 3 3 0 0 1-1 4.7 3 3 0 0 1-4 4.5V4z" },
   { id: "scenes", pl: "Sceny", en: "Scenes", icon: "M5 4l14 8-14 8V4z" },
+  { id: "agent", pl: "Agent", en: "Agent", icon: "M4 5h16v11H4zM9 20h6M12 16v4M8 9l2 2-2 2m5 0h3" },
   { id: "island", pl: "Wyspa", en: "Island", icon: "M6 6h12a3 3 0 0 1 0 6H6a3 3 0 0 1 0-6zM8 16h8" },
   { id: "appearance", pl: "Wygląd", en: "Appearance", icon: "M12 3a9 9 0 1 0 0 18c1 0 1.5-.8 1.5-1.6 0-1.3-1-1.4-1-2.6 0-.9.7-1.6 1.6-1.6H16a5 5 0 0 0 5-5C21 6.5 17 3 12 3zM7.5 12a1 1 0 1 0 0-.1M10 8a1 1 0 1 0 0-.1M15 8a1 1 0 1 0 0-.1" },
   { id: "advanced", pl: "Zaawansowane", en: "Advanced", icon: "M4 6h10M18 6h2M4 12h4m4 0h8M4 18h12m4 0h0M14 4v4M8 10v4M16 16v4" },
@@ -419,6 +422,7 @@ export default function Settings() {
                 {page === "voice" && <VoicePage s={ctx} />}
                 {page === "memory" && <MemoryPage s={ctx} />}
                 {page === "scenes" && <ScenesPage s={ctx} />}
+                {page === "agent" && <AgentPage lang={lang} />}
                 {page === "island" && <IslandPage s={ctx} />}
                 {page === "appearance" && <AppearancePage s={ctx} />}
                 {page === "advanced" && <AdvancedPage s={ctx} />}

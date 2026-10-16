@@ -37,6 +37,7 @@ type AState =
   | "thinking"
   | "retrying"
   | "confirm"
+  | "question"
   | "speaking"
   | "done"
   | "error";
@@ -45,6 +46,14 @@ interface Banner {
   state: AState;
   message?: string | null;
   kind?: ModeKind | null;
+}
+
+/** Computer-agent progress (`island://agent`). */
+interface AgentProgress {
+  phase: "running" | "confirm" | "asking" | "done" | "failed" | "aborted";
+  step: number;
+  max: number;
+  text: string;
 }
 
 interface IslandSections {
@@ -126,6 +135,8 @@ const SIZE = {
   stage: { w: 420, h: 84, r: 28 },
   stageLong: { w: 460, h: 118, r: 28 },
   confirm: { w: 400, h: 140, r: 28 },
+  question: { w: 420, h: 124, r: 28 },
+  agent: { w: 440, h: 92, r: 28 },
   result: { w: 540, h: 230, r: 28 },
   toast: { w: 440, h: 76, r: 26 },
   update: { w: 420, h: 76, r: 26 },
@@ -156,6 +167,7 @@ function spiritStateOf(b: Banner, music: boolean): SpiritState {
   switch (b.state) {
     case "listening":
     case "confirm":
+    case "question":
       return "listening";
     case "processing":
     case "thinking":
@@ -199,6 +211,7 @@ export default function Island() {
   const [tab, setTab] = useState<Tab>("now");
   const [caption, setCaption] = useState<string | null>(null);
   const [tools, setTools] = useState<ToolChip[]>([]);
+  const [agentRun, setAgentRun] = useState<AgentProgress | null>(null);
   const [paused, setPaused] = useState(false);
   const [timers, setTimers] = useState<TimerItem[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
@@ -360,6 +373,9 @@ export default function Island() {
     on<ClipboardItem[]>("island://clipboard", (items) => setClipboard(items ?? []));
     on<Banner>("island://assistant", (a) => setBanner({ ...a }));
     on<{ text: string }>("island://caption", (c) => setCaption(c.text));
+    on<AgentProgress>("island://agent", (p) =>
+      setAgentRun(p.phase === "running" || p.phase === "confirm" || p.phase === "asking" ? p : null),
+    );
     on<TimerItem[]>("island://timers", (list) => setTimers(list ?? []));
     on<PlanItem[]>("island://plans", (list) => setPlans(list ?? []));
     on<Omit<Toast, "id">>("island://toast", (p) => {
@@ -422,6 +438,7 @@ export default function Island() {
     showCaption,
     updateNotice: Boolean(updateNotice),
     mediaActive,
+    agent: agentRun !== null,
   });
   const nextTimer = timers[0] ?? null;
   holdCard.current = holdsCard(stage, Boolean(toast?.action));
@@ -519,9 +536,9 @@ export default function Island() {
     return () => window.clearTimeout(id);
   }, [mode, panel.w, panel.h, shrinkDelay]);
 
-  // Esc on a pending confirmation = Cancel (safe default).
+  // Esc on a pending confirmation / agent question = Cancel (safe default).
   useEffect(() => {
-    if (stage !== "confirm") return;
+    if (stage !== "confirm" && stage !== "question") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") invoke("agent_confirm", { accepted: false }).catch(() => undefined);
     };
@@ -583,7 +600,7 @@ export default function Island() {
         className="island-glass relative shrink-0 text-white"
         style={{ ["--accent" as string]: accent }}
         onClick={() => {
-          if (mode === "collapsed" && stage !== "confirm" && stage !== "result") expand();
+          if (mode === "collapsed" && !holdCard.current) expand();
         }}
       >
         <LayoutGroup>
@@ -681,6 +698,7 @@ export default function Island() {
                   update={update}
                   onInstallUpdate={onInstallUpdate}
                   onUpdateClose={() => setUpdateNotice(null)}
+                  agentRun={agentRun}
                 />
               )}
             </motion.div>
@@ -709,6 +727,8 @@ function labelFor(b: Banner, t: ReturnType<typeof useT>): string {
       return t("island.error");
     case "confirm":
       return t("island.confirmTitle");
+    case "question":
+      return t("island.questionTitle");
     default:
       return "";
   }
@@ -718,6 +738,7 @@ function kindLabel(kind: ModeKind | null, t: ReturnType<typeof useT>): string {
   if (kind === "dictation") return t("island.dictation");
   if (kind === "command") return t("island.command");
   if (kind === "ask") return t("island.ask");
+  if (kind === "agent") return t("island.agent");
   return "";
 }
 
@@ -815,7 +836,9 @@ function Collapsed({
   update,
   onInstallUpdate,
   onUpdateClose,
+  agentRun,
 }: {
+  agentRun: AgentProgress | null;
   textResult: TextResult | null;
   onResultClose: () => void;
   contextActive: boolean;
@@ -871,6 +894,33 @@ function Collapsed({
         </div>
       </div>
     );
+  }
+
+  if (stage === "question") {
+    return (
+      <div className="flex h-full flex-col justify-between px-4 pb-3.5 pt-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-3">
+          <SpiritSlot layoutId={spiritLayout}>{spirit(28)}</SpiritSlot>
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold">{t("island.questionTitle")}</div>
+            <div className="line-clamp-2 text-[12px] text-[var(--soul-muted)]">{banner.message}</div>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2">
+          <span className="mr-auto truncate text-[11px] text-[var(--soul-muted)]">{t("island.questionVoice")}</span>
+          <Press
+            onClick={() => invoke("agent_confirm", { accepted: false }).catch(() => undefined)}
+            className="soul-btn-ghost rounded-full px-4 py-1.5 text-[12px]"
+          >
+            {t("island.cancel")}
+          </Press>
+        </div>
+      </div>
+    );
+  }
+
+  if (stage === "agent" && agentRun) {
+    return <AgentCard run={agentRun} spirit={spirit(28)} spiritLayout={spiritLayout} accent={accent} />;
   }
 
   if (stage === "result" && textResult) {
@@ -1280,3 +1330,53 @@ function Expanded({
 }
 
 export type { IslandMode };
+
+/** Running computer-agent task: spirit (thinking), current step, n / max, progress line, Stop. */
+function AgentCard({
+  run,
+  spirit,
+  spiritLayout,
+  accent,
+}: {
+  run: AgentProgress;
+  spirit: React.ReactNode;
+  spiritLayout?: string;
+  accent: string;
+}) {
+  const t = useT();
+  const anim = useAnim();
+  const pct = Math.min(100, Math.max(4, (run.step / Math.max(1, run.max)) * 100));
+  return (
+    <div className="flex h-full flex-col justify-center gap-2 px-4" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-3">
+        <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-[10.5px] font-medium uppercase tracking-wider" style={{ color: accent }}>
+            {t("island.agent")}
+            <span className="tabular-nums text-white/55">
+              {run.step}/{run.max}
+            </span>
+          </div>
+          <div className="truncate text-[13px]">{run.text}</div>
+        </div>
+        <span title={t("island.agentStopHint")} className="shrink-0">
+          <Press
+            onClick={() => invoke("agent_stop").catch(() => undefined)}
+            className="soul-btn-ghost rounded-full px-3.5 py-1.5 text-[12px]"
+          >
+            {t("island.stop")}
+          </Press>
+        </span>
+      </div>
+      <div className="h-[3px] w-full overflow-hidden rounded-full bg-white/10">
+        <motion.div
+          className="h-full rounded-full"
+          style={{ background: accent }}
+          initial={false}
+          animate={{ width: `${pct}%` }}
+          transition={{ duration: anim.dur(260) }}
+        />
+      </div>
+    </div>
+  );
+}
