@@ -519,5 +519,29 @@
     "speeds": [
       "normal"
     ]
+  },
+  {
+    "id": "agent_wpisz",
+    "text": "Wpisz w wyszukiwarkę serwery FiveM.",
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    }
+  },
+  {
+    "id": "agent_formularz",
+    "text": "Zaznacz newsletter w formularzu.",
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    }
+  },
+  {
+    "id": "agent_ekran",
+    "text": "Co jest na ekranie?",
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    }
   }
 ]

@@ -137,7 +137,16 @@ fn role_of(role: u32) -> Option<Role> {
 
 fn active_frame(conn: &Connection) -> Result<Ref, String> {
     let root: Ref = (ROOT_BUS.to_string(), OwnedObjectPath::try_from(ROOT_PATH).map_err(|e| e.to_string())?);
+    let own = std::process::id();
     for app in children(conn, &root) {
+        // Never Soul itself (Island / Ask windows are AT-SPI apps too).
+        let pid = conn
+            .call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "GetConnectionUnixProcessID", &(app.0.as_str(),))
+            .ok()
+            .and_then(|m| m.body().deserialize::<u32>().ok());
+        if pid == Some(own) {
+            continue;
+        }
         for win in children(conn, &app) {
             if has(states(conn, &win), ST_ACTIVE) {
                 return Ok(win);

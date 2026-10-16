@@ -66,7 +66,7 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   tested by `npm run test:ui`). Rust UI strings: `i18n.rs` (`ui_lang` from `appearance.uiLang`, `tr`).
 - `agent/computer/` – **Soul Agent** (voice computer control, design in `docs/agent.md`). `intent.rs`: `is_computer_task`
   (UI verbs kliknij/przewiń/wpisz/zaznacz/wypełnij…, „przejdź do <in-app place>”, send verb + messenger, settings phrases)
-  runs in `text_command`/`run_agent_session`/Live paths **before** `local_dispatch` (so „kliknij Dalej” isn't media next);
+  runs in `text_command`/`run_agent_session`/Live paths **before** `local_dispatch` (so „kliknij Dalej” isn't media next); router misses are handed off by the command models via the `computer_task {goal}` tool (`COMPUTER_RULE` in `gemini.rs`: never refuse screen/UI requests);
   Smart routing uses the stricter `is_explicit_ui_command`; `local_plan` = 0-call „kliknij X” (one exact match) / „przewiń w
   dół”. `mod.rs::run_task(&dyn Host, task)`: snapshot → local plan or ONE Gemini call (`prompt.rs`, `mode: ANY`, single
   turn, JPEG only on step 1 / vision / after a failure / `look`) → `safety::check_step` (Refuse > Confirm > Allow; never
@@ -74,7 +74,7 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   for native apps, Unicode keys first for web — Win11 Notepad garbles fast Unicode packets) → settle (`ui_quick_state`) →
   verify → one retry only when nothing changed and the step wasn't confirmed/risky. `killswitch.rs`: double Esc / corner
   probe thread, talk key (`talk.rs` `on_down`), `agent_stop`. `host.rs` = Tauri `Host` (Island `island://agent`, confirm
-  card, `confirm::ask` question card, highlight window `agent-highlight`, capture exclusion); `harness.rs` = test `Host`.
+  card, `confirm::ask` question card, highlight window `agent-highlight` declared hidden in `tauri.conf.json`, capture exclusion — only on visible windows: `SetWindowDisplayAffinity` on a hidden one leaves a white framed ghost); `harness.rs` = test `Host`.
   Config: store key `computerAgent` (`agent_get_config`/`agent_save_config`, never touched by `save_app_settings`).
   Platform: `platform/ui.rs` (snapshot model, `finalize`, observation text), `coords.rs`, `input.rs` (`execute` always
   releases keys), `marks.rs` (set-of-marks JPEG), `windows_uia.rs` (UIA worker thread owns all COM objects),
@@ -150,7 +150,7 @@ Wake word harness (offline, no key; `tests/voice/wake/`, writes `wake/report.md`
 Test binaries have no Tauri comctl32 manifest — code reachable from a test must not call into Tauri windowing/events
 (e.g. `audio::build_capture_stream` takes a `LevelEmitter` callback, not an `AppHandle`), or the test exe fails to load
 with `STATUS_ENTRYPOINT_NOT_FOUND`. On first launch only the Island shows; open Settings from the tray, paste the Gemini key, Save.
-`SOUL_DEBUG=1` enables verbose Island/media logs (`soul_debug!`).
+`SOUL_DEBUG=1` enables verbose Island/media logs (`soul_debug!`). Dev builds route `<app data>/dev-transcript.txt` like a Smart talk-key transcript (`dev_transcript_watcher`) for end-to-end tests without a mic.
 
 ### Packaging / releases
 - Version: `package.json` is the source; `tauri.conf.json` has `"version": "../package.json"`; `npm run version:sync`

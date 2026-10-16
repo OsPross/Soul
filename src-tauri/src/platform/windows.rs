@@ -482,8 +482,14 @@ impl Platform for WindowsPlatform {
                 1 => Some(false),
                 _ => None,
             });
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+        // One of Soul's own windows (Ask overlay, Island, highlight) in front is never a "game".
+        let mut fg_pid = 0u32;
+        unsafe { GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut fg_pid)) };
+        let own_in_front = fg_pid == std::process::id();
         let fullscreen = unsafe { SHQueryUserNotificationState() }.ok().map(|s| {
-            s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE
+            !own_in_front
+                && (s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE)
         });
         super::PowerState {
             on_battery,

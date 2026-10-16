@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for Soul windows",
-  "windows": ["island", "overlay", "settings", "ask"],
+  "windows": ["island", "overlay", "settings", "ask", "agent-highlight"],
   "permissions": [
     "core:default",
     "core:window:allow-show",

@@ -430,6 +430,7 @@ struct FullscreenProbe {
     active: u32,
     state: u32,
     fullscreen: u32,
+    pid: u32,
 }
 
 static FULLSCREEN_PROBE: once_cell::sync::Lazy<Mutex<Option<FullscreenProbe>>> = once_cell::sync::Lazy::new(|| Mutex::new(None));
@@ -444,7 +445,8 @@ impl FullscreenProbe {
         let active = atom(b"_NET_ACTIVE_WINDOW")?;
         let state = atom(b"_NET_WM_STATE")?;
         let fullscreen = atom(b"_NET_WM_STATE_FULLSCREEN")?;
-        Some(Self { conn, root, active, state, fullscreen })
+        let pid = atom(b"_NET_WM_PID")?;
+        Some(Self { conn, root, active, state, fullscreen, pid })
     }
 
     fn query(&self) -> Option<bool> {
@@ -459,6 +461,18 @@ impl FullscreenProbe {
             .next()
             .unwrap_or(0);
         if win == 0 {
+            return Some(false);
+        }
+        // Soul's own windows (Ask overlay…) never count as a fullscreen app.
+        let owner = self
+            .conn
+            .get_property(false, win, self.pid, AtomEnum::CARDINAL, 0, 1)
+            .ok()?
+            .reply()
+            .ok()?
+            .value32()
+            .and_then(|mut v| v.next());
+        if owner == Some(std::process::id()) {
             return Some(false);
         }
         let states = self

@@ -1062,12 +1062,17 @@ impl Actor {
             self.note_first_token("content");
         }
 
-        if self.stale_outputs && (complete || interrupted) {
-            // This closes the previous (interrupted) turn, not the current one.
-            self.stale_outputs = false;
-            for e in events {
-                if let Some(turn) = self.turn.as_mut() {
-                    turn.emit(e);
+        if self.stale_outputs {
+            // Completions here belong to the previous (cancelled) turn, which only ends with its
+            // turnComplete: its generationComplete may come seconds earlier, and letting the
+            // turnComplete through would end the current turn before it spoke.
+            if interrupted || sc.get("turnComplete").and_then(Value::as_bool) == Some(true) {
+                soul_live_log(self.label, "stale turn closed");
+                self.stale_outputs = false;
+            }
+            if let Some(turn) = self.turn.as_mut() {
+                for e in events {
+                    turn.emit(e); // input transcripts only (model output was skipped above)
                 }
             }
             return;

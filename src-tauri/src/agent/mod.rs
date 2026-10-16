@@ -703,9 +703,12 @@ fn finish_command(
 /// thread (it holds `busy`), show the result, and speak a one-sentence summary afterwards.
 fn computer_command(app: &AppHandle, text: &str) -> CommandOutcome {
     eprintln!("[soul][agent] router=computer_task");
+    // The Live model may already be speaking an answer of its own; the agent's summary replaces it.
+    app.state::<AppState>().voice.stop();
     crate::island::set_activity(crate::island::Activity::Agent);
     let host = computer::host::AppHost::new(app);
     let out = computer::run_task(&host, text);
+    computer::hide_highlight(app);
     eprintln!(
         "[soul][agent] computer_task done steps={} model_calls={} screenshots={} request_kb={} ms={}",
         out.steps,
@@ -856,6 +859,14 @@ fn drain_voice(
     }
     while voice.player.is_speaking() && !voice.barged() && t0.elapsed() < VOICE_MAX {
         thread::sleep(Duration::from_millis(50));
+    }
+    // (After a barge-in the player belongs to the next reply.)
+    if !voice.barged() {
+        if voice.player.is_speaking() {
+            voice.player.stop(); // timed out: never leave audio running past the reply
+        } else {
+            voice.player.finish();
+        }
     }
     eprintln!(
         "[soul][voice] reply done why={why} audio_ms={} total_ms={} since_release_ms={}",
@@ -1192,12 +1203,18 @@ fn handle_live_calls(
     try_router: bool,
 ) -> LiveAgentOutcome {
     log_live_final(app, released, heard, "tool_call");
-    if try_router && computer::is_computer_task(heard) {
+    // The router's own match first, else the model's hand-off (`computer_task {goal}`).
+    let task = if try_router && computer::is_computer_task(heard) {
+        Some(heard.to_string())
+    } else {
+        calls.iter().find(|c| c.call.name == computer::TOOL_NAME).map(|c| computer_goal(&c.call.args, heard))
+    };
+    if let Some(task) = task {
         live.commands.send_tool_responses(skipped_responses(
             calls,
             "Handled by Soul's computer agent; say nothing now.",
         ));
-        return LiveAgentOutcome::Computer(heard.to_string());
+        return LiveAgentOutcome::Computer(task);
     }
     if try_router && !heard.is_empty() {
         if let Some(local) = local_dispatch(app, platform, heard) {
@@ -1220,6 +1237,12 @@ fn handle_live_calls(
     let mut seen = Vec::new();
     let result = execute_live_calls(app, platform, live, calls, &mut seen);
     LiveAgentOutcome::Done(result, Some(seen))
+}
+
+/// The task of a `computer_task` call: its `goal`, else what the user said.
+fn computer_goal(args: &Value, heard: &str) -> String {
+    let goal = args.get("goal").and_then(Value::as_str).unwrap_or("").trim();
+    if goal.is_empty() { heard.trim() } else { goal }.to_string()
 }
 
 fn log_live_final(app: &AppHandle, released: Instant, transcript: &str, via: &str) {
@@ -1674,6 +1697,8 @@ fn run_tool(
             Ok("Typed text".into())
         }
         "answer" => arg_str(args, "text"),
+        // REST (and late Live calls): the model handed the command to the computer agent.
+        computer::TOOL_NAME => computer_command(app, &computer_goal(args, "")).result,
         "set_voice_volume" => set_voice_volume(app, args),
         "remember" => {
             let fact = arg_str(args, "fact")?;

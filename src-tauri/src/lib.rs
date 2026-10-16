@@ -749,6 +749,8 @@ pub fn run() {
             eprintln!("[soul] starting with {}", redact_settings(&settings));
             // Offline wake word listener (idle until enabled and trained).
             wake::init(app.handle(), &settings);
+            #[cfg(debug_assertions)]
+            dev_transcript_watcher(app.handle().clone());
             app.state::<AppState>().voice.set_volume(settings.voice_volume);
 
             // Warm Live sessions in the background (non-blocking) so the first PTT is fast.
@@ -1269,39 +1271,84 @@ pub(crate) fn on_smart_released(app: &AppHandle) {
                 return;
             }
         };
-        let text_field = || platform.text_input_focused();
-        let context_active = agent::context_active(&settings);
-        match agent::classify_smart(&heard.text, &settings.wake_word, &text_field, context_active) {
-            agent::Intent::Command { text, reason } => {
-                eprintln!(
-                    "[soul][dictation] smart route=command reason={reason} ms={}",
-                    released.elapsed().as_millis()
-                );
-                island::set_activity(island::Activity::Command);
-                // Releases `busy` itself before the spoken reply plays.
-                agent::run_text_command(&app_handle, &platform, &live, &text, released);
+        route_smart_transcript(&app_handle, &platform, &live, &settings, heard, released);
+    });
+}
+
+/// Dev builds only: `<app data>/dev-transcript.txt` is routed like a Smart talk-key transcript,
+/// so the voice path can be tested end to end without a microphone.
+#[cfg(debug_assertions)]
+fn dev_transcript_watcher(app: AppHandle) {
+    let Ok(file) = app.path().app_data_dir().map(|d| d.join("dev-transcript.txt")) else {
+        return;
+    };
+    thread::spawn(move || loop {
+        thread::sleep(std::time::Duration::from_millis(300));
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let _ = std::fs::remove_file(&file);
+        let text = text.trim_start_matches('\u{feff}'); // PowerShell 5 writes a BOM
+        let state = app.state::<AppState>();
+        {
+            let mut busy = state.busy.lock();
+            if *busy {
+                eprintln!("[soul][dictation] dev transcript ignored (busy)");
+                continue;
             }
-            agent::Intent::Dictation => {
-                eprintln!(
-                    "[soul][dictation] smart route=dictation chars={} ms={}",
-                    heard.text.chars().count(),
-                    released.elapsed().as_millis()
-                );
-                match paste_dictation(&platform, &settings, heard, released) {
-                    Ok(text) => {
-                        island::emit_caption(&app_handle, &text);
-                        let _ = emit_overlay(&app_handle, "done", None);
-                        schedule_hide(&app_handle, 700);
-                    }
-                    Err(e) => {
-                        report_error(&app_handle, e);
-                        schedule_hide(&app_handle, 10000);
-                    }
+            *busy = true;
+        }
+        eprintln!("[soul][dictation] dev transcript {:?}", text.trim());
+        let settings = load_settings(&app).unwrap_or_default();
+        let heard = Heard { text: text.trim().to_string(), live: true };
+        let (platform, live) = (Arc::clone(&state.platform), Arc::clone(&state.live));
+        route_smart_transcript(&app, &platform, &live, &settings, heard, Instant::now());
+    });
+}
+
+/// Smart routing of a finished transcript (holds `busy`): commands go to the agent (which
+/// releases `busy` before its spoken reply), dictation is pasted.
+fn route_smart_transcript(
+    app: &AppHandle,
+    platform: &Arc<dyn Platform>,
+    live: &Arc<ai::live::LivePool>,
+    settings: &Settings,
+    heard: Heard,
+    released: Instant,
+) {
+    let text_field = || platform.text_input_focused();
+    let context_active = agent::context_active(settings);
+    match agent::classify_smart(&heard.text, &settings.wake_word, &text_field, context_active) {
+        agent::Intent::Command { text, reason } => {
+            eprintln!(
+                "[soul][dictation] smart route=command reason={reason} ms={}",
+                released.elapsed().as_millis()
+            );
+            island::set_activity(island::Activity::Command);
+            agent::run_text_command(app, platform, live, &text, released);
+        }
+        agent::Intent::Dictation => {
+            eprintln!(
+                "[soul][dictation] smart route=dictation chars={} ms={}",
+                heard.text.chars().count(),
+                released.elapsed().as_millis()
+            );
+            match paste_dictation(platform, settings, heard, released) {
+                Ok(text) => {
+                    island::emit_caption(app, &text);
+                    let _ = emit_overlay(app, "done", None);
+                    schedule_hide(app, 700);
                 }
-                release_busy(&app_handle);
+                Err(e) => {
+                    report_error(app, e);
+                    schedule_hide(app, 10000);
+                }
+            }
+            if let Some(state) = app.try_state::<AppState>() {
+                *state.busy.lock() = false;
             }
         }
-    });
+    }
 }
 
 /// Live setup rejected because the model id is unknown/retired → re-validate models.

@@ -569,59 +569,50 @@ impl Run<'_> {
     }
 }
 
-/// Flash the ring around `rect` (physical px) for ~0.65 s. The window is created on first use,
-/// never takes focus and is excluded from screen capture.
+/// Highlight flashes; a hide only applies to the flash that scheduled it.
+static HIGHLIGHT_TICKET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Flash the ring around `rect` (physical px) for ~0.65 s. The window (`tauri.conf.json`,
+/// created hidden) is click-through, never activated and excluded from screen capture.
 pub(crate) fn show_highlight(app: &tauri::AppHandle, rect: Rect) {
-    use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder};
+    use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize};
     let Some(state) = app.try_state::<crate::AppState>() else { return };
+    let Some(win) = app.get_webview_window(HIGHLIGHT_LABEL) else { return };
     let platform = Arc::clone(&state.platform);
-    let win = match app.get_webview_window(HIGHLIGHT_LABEL) {
-        Some(w) => w,
-        None => {
-            let built = WebviewWindowBuilder::new(app, HIGHLIGHT_LABEL, WebviewUrl::App("index.html".into()))
-                .title("Soul highlight")
-                .decorations(false)
-                .transparent(true)
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .resizable(false)
-                .shadow(false)
-                .focused(false)
-                .visible(false)
-                .build();
-            match built {
-                Ok(w) => {
-                    let _ = w.set_ignore_cursor_events(true);
-                    if let Some(id) = crate::platform::native_window_id(&w) {
-                        platform.prepare_overlay_window(id);
-                        let _ = platform.exclude_from_capture(id, true);
-                    }
-                    w
-                }
-                Err(e) => {
-                    eprintln!("[soul][agent] highlight window failed: {e}");
-                    return;
-                }
-            }
-        }
-    };
+    let id = crate::platform::native_window_id(&win);
+    // Before the style bits: tao recomputes the extended style on this call.
+    let _ = win.set_ignore_cursor_events(true);
+    if let Some(id) = id {
+        platform.prepare_overlay_window(id);
+    }
     let pad = HIGHLIGHT_PAD;
     let _ = win.set_position(PhysicalPosition::new(rect.x - pad, rect.y - pad));
     let _ = win.set_size(PhysicalSize::new((rect.w + 2 * pad).max(24) as u32, (rect.h + 2 * pad).max(24) as u32));
-    let id = crate::platform::native_window_id(&win);
     if !id.is_some_and(|id| platform.show_overlay_window(id, true)) {
         let _ = win.show();
     }
+    // Only once visible (see `exclude_from_capture`).
+    if let Some(id) = id {
+        let _ = platform.exclude_from_capture(id, true);
+    }
     let _ = win.emit("agent://highlight", ());
-    static SHOWN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let ticket = SHOWN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let ticket = HIGHLIGHT_TICKET.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(HIGHLIGHT_VISIBLE);
-        if SHOWN.load(std::sync::atomic::Ordering::SeqCst) != ticket {
-            return; // a newer flash owns the window
-        }
-        if !id.is_some_and(|id| platform.show_overlay_window(id, false)) {
-            let _ = win.hide();
+        if HIGHLIGHT_TICKET.load(std::sync::atomic::Ordering::SeqCst) == ticket {
+            hide_highlight(&app);
         }
     });
+}
+
+/// Hide the ring now (flash timeout, task end / abort).
+pub(crate) fn hide_highlight(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    HIGHLIGHT_TICKET.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let Some(win) = app.get_webview_window(HIGHLIGHT_LABEL) else { return };
+    let Some(state) = app.try_state::<crate::AppState>() else { return };
+    if !crate::platform::native_window_id(&win).is_some_and(|id| state.platform.show_overlay_window(id, false)) {
+        let _ = win.hide();
+    }
 }

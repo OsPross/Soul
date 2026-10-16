@@ -43,6 +43,22 @@
         "focus": false
       },
       {
+        "label": "agent-highlight",
+        "title": "Soul highlight",
+        "url": "index.html",
+        "width": 64,
+        "height": 64,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "shadow": false
+      },
+      {
         "label": "settings",
         "title": "Soul Settings",
         "url": "index.html",

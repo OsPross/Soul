@@ -926,9 +926,17 @@ Never call web_search unless the user explicitly says to search/find/look up \
 (e.g. wyszukaj, znajdź, poszukaj, wygoogluj, search, find, look up). \
 For YouTube, use youtube_search (results page) or youtube_play (first result) — never web_search. \
 If the command is about music playback (next/previous/pause/play/skip), use media_control only. \
-Do not open a browser for playback commands. If unsure, use answer()."
+Do not open a browser for playback commands. \
+{COMPUTER_RULE} If unsure, use answer()."
     )
 }
+
+/// Soul can see and control the screen (computer agent) — the command models must hand off, never refuse.
+const COMPUTER_RULE: &str = "You CAN see the user's screen and control the computer through the computer_task tool. \
+For anything about what is on the screen (\u{201e}co jest na ekranie?\u{201d}, \u{201e}co widzisz?\u{201d}) or done inside an app or web page \
+(clicking, typing into a field or search box, filling in or searching a form, checking boxes, scrolling, navigating, settings) \
+call computer_task with the goal in the user's words. Never say you cannot see the screen, cannot fill in forms or cannot \
+interact with apps or web pages.";
 
 /// Marker for text turns that report an action Soul already executed locally (pre-router):
 /// the Live model should only confirm it out loud.
@@ -954,7 +962,7 @@ pub fn personality_instruction(personality: &str) -> &'static str {
 pub fn agent_voice_system_prompt(settings: &crate::config::Settings) -> String {
     let mut out = agent_live_system_prompt(&settings.language);
     out.push_str(
-        " You reply with your voice. After a tool runs, confirm out loud in one short sentence what you did (e.g. \"Otwieram Spotify.\", \"Ściszam do trzydziestu procent.\"). If a tool fails, say briefly what went wrong. For questions, answer by voice directly instead of calling a tool.",
+        " You reply with your voice. After a tool runs, confirm out loud in one short sentence what you did (e.g. \"Otwieram Spotify.\", \"Ściszam do trzydziestu procent.\"). If a tool fails, say briefly what went wrong. For general questions, answer by voice directly instead of calling a tool; questions about the screen go to computer_task.",
     );
     out.push(' ');
     out.push_str(personality_instruction(&settings.personality));
@@ -1252,6 +1260,17 @@ pub fn agent_tool_declarations() -> Value {
             "name": "morning_briefing",
             "description": "Short briefing: time, date, running timers, notes and now playing (dzień dobry).",
             "parameters": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "computer_task",
+            "description": "Hand the command to Soul's computer agent, which SEES the user's screen and controls the mouse and keyboard: describe or read what is on the screen, click buttons and links, type into fields and search boxes, fill in forms, check/uncheck boxes, scroll, navigate inside an app or a web page, change settings, send a message in an app.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "The task in the user's own words, e.g. \"Wpisz w wyszukiwarkę serwery FiveM\"" }
+                },
+                "required": ["goal"]
+            }
         },
         {
             "name": "answer",

@@ -106,7 +106,31 @@ pub fn is_computer_task(text: &str) -> bool {
     if open && words.get(1).is_some_and(|w| w == "ustawienia" || w == "settings") && words.len() >= 3 {
         return true;
     }
-    false
+    // 5. About something on the screen: „sprawdź, które pola w formularzu są puste” (not a web
+    // search unless it says so: „wyszukaj, jak wypełnić pole w formularzu PIT”).
+    let on_screen = SCREEN_PLACES.iter().any(|p| format!(" {joined} ").contains(&format!(" {p} ")));
+    if on_screen && !matches!(first.as_str(), "wyszukaj" | "wygoogluj" | "poszukaj" | "search" | "google") {
+        return true;
+    }
+    is_screen_question(&words)
+}
+
+/// Places on the screen (folded, locative): the command is about the UI in front of the user.
+const SCREEN_PLACES: &[&str] = &[
+    "w formularzu", "na ekranie", "na tej stronie", "w tym oknie", "w tym polu", "w polu", "on the screen",
+    "on my screen", "on this page", "in the form", "in this window",
+];
+
+/// „co jest na ekranie?”, „co widzisz?”, „przeczytaj, co jest na ekranie”, "what's on my screen".
+/// („ekranu” is left out on purpose: „jasność ekranu”, „zrzut ekranu” are not about its content.)
+fn is_screen_question(words: &[String]) -> bool {
+    let Some(first) = words.first() else { return false };
+    let asks = matches!(
+        first.as_str(),
+        "co" | "czy" | "przeczytaj" | "opisz" | "powiedz" | "what" | "whats" | "read" | "describe" | "tell"
+    );
+    let on_screen = words.iter().any(|w| matches!(w.as_str(), "ekranie" | "ekran" | "monitorze" | "screen"));
+    asks && (on_screen || words.iter().any(|w| w == "widzisz"))
 }
 
 /// Messenger apps named outright (generic „mail” / „SMS” stay dictation in Smart routing).
@@ -135,6 +159,9 @@ pub fn is_explicit_ui_command(text: &str) -> bool {
         return is_computer_task(text);
     }
     if MESSAGE_VERBS.contains(&first) && words.iter().any(|w| NAMED_MESSENGERS.contains(&w.as_str())) {
+        return true;
+    }
+    if is_screen_question(&words) && words.len() <= 8 {
         return true;
     }
     matches!(first, "przejdz" | "ustaw" | "zmien" | "otworz" | "w" | "go" | "open" | "set" | "change") && is_computer_task(text)
@@ -260,6 +287,15 @@ mod tests {
             "scroll down",
             "send Silver a message on Discord saying I'll be late",
             "go to the privacy settings",
+            // Voice-harness agent_* cases.
+            "Wpisz w wyszukiwarkę serwery FiveM",
+            "Zaznacz newsletter w formularzu",
+            "Co jest na ekranie?",
+            "co widzisz?",
+            "przeczytaj, co jest na ekranie",
+            "what's on my screen?",
+            "sprawdź, które pola w formularzu są jeszcze puste",
+            "ile jest serwerów na tej stronie",
         ] {
             assert!(is_computer_task(t), "{t}");
         }
@@ -287,6 +323,9 @@ mod tests {
             "wyślij mi przypomnienie jutro",
             "check the weather",
             "przejdź do następnej piosenki",
+            "co słychać?",
+            "zrób zrzut ekranu",
+            "wyszukaj, co wpisać w polu NIP w formularzu PIT",
             "",
         ] {
             assert!(!is_computer_task(t), "{t}");
@@ -305,6 +344,8 @@ mod tests {
             "otwórz ustawienia dźwięku i ustaw mikrofon na Voicemeeter",
             "przejdź do ustawień prywatności",
             "wypełnij ten formularz moimi danymi",
+            "Zaznacz newsletter w formularzu",
+            "Co jest na ekranie?",
         ] {
             assert!(is_cmd(t), "{t}");
         }

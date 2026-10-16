@@ -935,10 +935,17 @@ pub(super) fn monitors() -> Vec<Monitor> {
 }
 
 pub(super) fn exclude_from_capture(id: u64, on: bool) -> Result<(), String> {
-    use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
+    use windows::Win32::UI::WindowsAndMessaging::{IsWindowVisible, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE};
     // SAFETY: user32 validates the handle.
-    unsafe { SetWindowDisplayAffinity(hwnd(id), if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE }) }
-        .map_err(|e| format!("SetWindowDisplayAffinity: {e}"))
+    unsafe {
+        // On a hidden (transparent, undecorated) window this makes DWM draw a stale framed ghost
+        // that stays on screen; a hidden window isn't captured anyway.
+        if !IsWindowVisible(hwnd(id)).as_bool() {
+            return Ok(());
+        }
+        SetWindowDisplayAffinity(hwnd(id), if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE })
+    }
+    .map_err(|e| format!("SetWindowDisplayAffinity: {e}"))
 }
 
 /// Click-through, never-activated, no taskbar button (agent highlight ring).

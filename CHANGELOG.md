@@ -40,6 +40,15 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- Spoken requests like „wpisz w wyszukiwarkę…”, „zaznacz newsletter w formularzu” or „co jest na
+  ekranie?” now always reach Soul Agent. Before, the voice model sometimes answered „Niestety, nie
+  widzę Twojego ekranu” instead; it now hands such requests to the agent itself.
+- A blank white „Soul” window with a title bar no longer appears and stays on screen while the agent
+  works; the highlight ring is a proper click-through overlay again.
+- Soul's spoken reply can no longer get stuck repeating its last sound („jasneeee…”): the audio
+  output is stopped when a reply ends, and restarted if the sound device stalls.
+- Soul's spoken summary after an agent task is no longer cut off before it starts.
+- Soul's own windows never count as a fullscreen game for „Pause in games”.
 - Closing apps („zamknij Discord”, „zamknij Steam”) works and takes under 4 s: Soul finds the app
   by its program (Discord.exe, steam.exe, Spotify.exe…), never a helper process like
   steamwebhelper, closes it gracefully and then ends the whole process tree. Apps that hide to the

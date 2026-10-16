@@ -269,5 +269,26 @@
       "route": "command"
     },
     "file": "hain_pauza_sciszyc.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    },
+    "file": "agent_wpisz.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    },
+    "file": "agent_formularz.wav"
+  },
+  {
+    "expect": {
+      "route": "command",
+      "tool": "computer_task"
+    },
+    "file": "agent_ekran.wav"
   }
 ]
