@@ -18,6 +18,11 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- Soul Agent no longer fails on free-tier limits: model calls rotate through a pool (3.1 / 3.5 /
+  2.5 flash-lite, 3 / 3.7 / 3.6 flash — only those your key lists), each with a client-side
+  requests-per-minute limit (`modelRpm` in the agent config, defaults 15/15/10/5/5/5). A 429/503
+  puts that model on a 60 s cooldown and the next one is tried at once; when all are busy the
+  Island shows „Czekam na model…” (up to 8 s) instead of failing.
 - Vio: tabs are now read correctly (Vio's tab ids are text), sleeping tabs are woken before reading,
   and „otwórz …” links open as a new Vio tab (with Vio brought to the front) whenever Vio is
   connected — the system browser is used only without Vio. Web searches and YouTube

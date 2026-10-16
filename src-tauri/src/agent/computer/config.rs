@@ -26,6 +26,8 @@ pub struct AgentConfig {
     pub blocklist: Vec<String>,
     /// REST model id; empty = the Circle-to-Ask model.
     pub model: String,
+    /// Requests per minute per pool model (`ai::pool`); missing = the model's default.
+    pub model_rpm: std::collections::HashMap<String, u32>,
     /// Keep step screenshots in the app data dir (`agent-debug/`, cleared per task).
     pub debug_screenshots: bool,
 }
@@ -39,6 +41,7 @@ impl Default for AgentConfig {
             confirm_level: "risky".into(),
             blocklist: safety::default_blocklist(),
             model: String::new(),
+            model_rpm: Default::default(),
             debug_screenshots: false,
         }
     }

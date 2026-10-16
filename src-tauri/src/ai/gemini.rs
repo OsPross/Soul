@@ -737,6 +737,12 @@ impl GeminiClient {
         })
     }
 
+    /// One agent request on this client's model, no fallback: the model pool (`ai::pool`) rotates
+    /// itself. Err = (HTTP status, message).
+    pub fn agent_generate_once(&self, body: Value) -> Result<Value, (Option<u16>, String)> {
+        self.post_generate_json(body, "agent").map_err(|e| (e.status, e.message))
+    }
+
     /// Voice-command agent: audio in → function calls out (caller executes tools).
     /// Immediate fallback on 503/429/404/network (same policy as dictation).
     pub fn agent_generate_resilient<F, R>(

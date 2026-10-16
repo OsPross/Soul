@@ -4,12 +4,14 @@
 use super::config::{self, AgentConfig};
 use super::{Host, ModelFn, Phase, Progress};
 use crate::ai::gemini::GeminiClient;
+use crate::ai::pool;
 use crate::config::load_settings;
 use crate::i18n::Lang;
-use crate::platform::ui::Rect;
+use crate::platform::ui::{clip, Rect};
 use crate::platform::Platform;
 use crate::AppState;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Soul's windows that must never end up in the model's screenshot.
@@ -28,6 +30,18 @@ impl AppHost {
             settings: load_settings(app).unwrap_or_default(),
             cfg: config::load(app),
         }
+    }
+
+    /// The model the user chose (agent setting, else Circle-to-Ask): leads the pool.
+    fn first_model(&self) -> String {
+        if self.cfg.model.is_empty() { self.settings.effective_ask_model().to_string() } else { self.cfg.model.clone() }
+    }
+
+    /// Rotation pool for this moment (models list, daily quota and the RPM limits of the config).
+    fn pool_for(cfg: &AgentConfig, first: &str) -> Vec<(String, u32)> {
+        let available: Vec<String> =
+            crate::ai::gemini::cached_models().into_iter().filter(|m| m.supports_generate).map(|m| m.id).collect();
+        pool::models(&available, first, &cfg.model_rpm)
     }
 }
 
@@ -53,20 +67,55 @@ impl Host for AppHost {
     }
 
     fn model(&self) -> ModelFn {
-        let model = if self.cfg.model.is_empty() {
-            self.settings.effective_ask_model().to_string()
-        } else {
-            self.cfg.model.clone()
-        };
-        let fallback = crate::resolve_fallback_model(&self.settings, &crate::ai::gemini::cached_models());
         let key = self.settings.api_key.clone();
+        let (cfg, first) = (self.cfg.clone(), self.first_model());
         let app = self.app.clone();
         Arc::new(move |body| {
-            let app = app.clone();
-            GeminiClient::new(&key, &model).agent_generate_resilient(body, Some(&fallback), |_, _| {}, move |retired| {
-                crate::retire_model_and_heal(&app, retired);
-            })
+            let mut skip: Vec<String> = Vec::new();
+            let mut errors: Vec<String> = Vec::new();
+            loop {
+                let models = Self::pool_for(&cfg, &first);
+                let now = Instant::now();
+                let mut pool = pool::global().lock();
+                let (i, reason) = match pool.pick(&models, &skip, now) {
+                    Some(i) => (i, if skip.is_empty() { "first under its RPM limit" } else { "next after a failure" }),
+                    // Everything busy (the wait ran out): the model that frees up first.
+                    None => match pool.earliest(&models, &skip, now) {
+                        Some((i, _)) => (i, "all busy — earliest slot"),
+                        None => break,
+                    },
+                };
+                let model = models[i].0.clone();
+                pool.record(&model, now);
+                drop(pool);
+                eprintln!("[soul][agent] model={model} ({reason}, limit {}/min)", models[i].1);
+                match GeminiClient::new(&key, &model).agent_generate_once(body.clone()) {
+                    Ok(v) => return Ok(v),
+                    Err((status, msg)) => {
+                        let msg = crate::ai::gemini::redact_secrets(&msg);
+                        eprintln!("[soul][agent] model {model} failed ({status:?}): {}", clip(&msg, 160));
+                        if crate::ai::quota::is_daily_quota_error(status, &msg) {
+                            crate::ai::quota::mark_daily_exhausted(&model);
+                        } else if matches!(status, Some(429 | 503)) {
+                            pool::global().lock().cool(&model, Instant::now());
+                        } else if status == Some(404) {
+                            crate::retire_model_and_heal(&app, &model);
+                        } else {
+                            return Err(msg);
+                        }
+                        errors.push(format!("{model}: {}", clip(&msg, 100)));
+                        skip.push(model);
+                    }
+                }
+            }
+            Err(format!("All models failed or are over their limit. {}", errors.join(" | ")))
         })
+    }
+
+    fn model_wait(&self) -> Option<Duration> {
+        let models = Self::pool_for(&self.cfg, &self.first_model());
+        let w = pool::global().lock().earliest(&models, &[], Instant::now())?.1;
+        (!w.is_zero()).then_some(w)
     }
 
     fn progress(&self, p: &Progress) {

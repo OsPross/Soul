@@ -79,6 +79,11 @@ pub trait Host {
     /// `[CONTEXT]` block of the conversation, if alive.
     fn context(&self) -> Option<String>;
     fn model(&self) -> ModelFn;
+    /// How long until a model has a free request slot (`None` = now). The agent waits for it
+    /// outside the per-call timeout.
+    fn model_wait(&self) -> Option<Duration> {
+        None
+    }
     fn progress(&self, p: &Progress);
     /// Confirmation card (buttons / spoken yes-no). Blocking; false on timeout.
     fn confirm(&self, question: &str) -> bool;
@@ -338,6 +343,22 @@ impl Run<'_> {
     fn call_model(&mut self, body: Value) -> Result<Value, String> {
         self.bytes += body.to_string().len();
         self.calls += 1;
+        // Waiting for a free RPM slot is not part of the call's 10 s (the 90 s task limit still is).
+        let wait_t0 = Instant::now();
+        let mut said = false;
+        while let Some(w) = self.host.model_wait() {
+            if wait_t0.elapsed() >= crate::ai::pool::MAX_WAIT {
+                break;
+            }
+            if !said {
+                said = true;
+                self.progress(Phase::Running, tr(self.lang, "Czekam na model…", "Waiting for a model…"));
+            }
+            if killswitch::aborted() {
+                return Err(crate::platform::input::ABORTED.into());
+            }
+            std::thread::sleep(w.min(Duration::from_millis(100)));
+        }
         let model = self.host.model();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
