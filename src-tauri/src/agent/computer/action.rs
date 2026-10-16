@@ -29,6 +29,18 @@ pub enum Action {
     ReadText(u32),
     Done(String),
     AskUser(String),
+    /// Vio browser API calls without a UI counterpart (`vio.rs`).
+    Browser(BrowserOp),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrowserOp {
+    ListTabs,
+    /// New tab with `url`, or switch to the open tab `tab` (wakes a sleeping one).
+    Open { url: Option<String>, tab: Option<i64> },
+    Navigate(String),
+    ReadPage,
+    GetElements,
 }
 
 /// A parsed function call.
@@ -48,7 +60,14 @@ pub struct Decision {
 impl Action {
     /// Changes something on screen (vs. reading / waiting / finishing).
     pub fn acts(&self) -> bool {
-        !matches!(self, Self::Wait(_) | Self::ReadText(_) | Self::Done(_) | Self::AskUser(_))
+        !matches!(
+            self,
+            Self::Wait(_)
+                | Self::ReadText(_)
+                | Self::Done(_)
+                | Self::AskUser(_)
+                | Self::Browser(BrowserOp::ListTabs | BrowserOp::ReadPage | BrowserOp::GetElements)
+        )
     }
 
     pub fn target_id(&self) -> Option<u32> {
@@ -149,6 +168,38 @@ pub fn parse(name: &str, args: &Value) -> Result<Decision, String> {
         ),
         "done" => Action::Done(arg_str(args, "summary").unwrap_or_default()),
         "ask_user" => Action::AskUser(need("question")?),
+        // Vio: element ids map to Vio refs; the rest reuses the UI actions (and their safety rules).
+        "browser_click" => Action::Click {
+            target: Target::Id(arg_num(args, "id").filter(|n| *n >= 1.0).ok_or("browser_click: missing 'id'")?.round() as u32),
+            button: MouseButton::Left,
+            count: 1,
+        },
+        "browser_fill" => {
+            let id = arg_num(args, "id").filter(|n| *n >= 1.0).ok_or("browser_fill: missing 'id'")?.round() as u32;
+            let text = args.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+            if text.chars().count() > 2000 {
+                return Err("browser_fill: text longer than 2000 characters".into());
+            }
+            Action::TypeText { target: Some(Target::Id(id)), text, clear: true, submit: arg_bool(args, "submit") }
+        }
+        "browser_key" => Action::KeyCombo(Combo::parse(&need("key")?)?),
+        "browser_scroll" => Action::Scroll {
+            target: None,
+            dir: ScrollDir::parse(&need("direction")?).filter(|d| d.is_vertical()).ok_or("browser_scroll: direction must be up/down")?,
+            amount: 5,
+        },
+        "browser_list_tabs" => Action::Browser(BrowserOp::ListTabs),
+        "browser_open" => {
+            let tab = arg_num(args, "tab_id").filter(|n| *n >= 0.0).map(|n| n.round() as i64);
+            let url = arg_str(args, "url").map(|u| super::vio::normalize_url(&u)).transpose()?;
+            if url.is_none() && tab.is_none() {
+                return Err("browser_open: give a url or a tab_id".into());
+            }
+            Action::Browser(BrowserOp::Open { url, tab })
+        }
+        "browser_navigate" => Action::Browser(BrowserOp::Navigate(super::vio::normalize_url(&need("url")?)?)),
+        "browser_read_page" => Action::Browser(BrowserOp::ReadPage),
+        "browser_get_elements" => Action::Browser(BrowserOp::GetElements),
         other => return Err(format!("Unknown function '{other}'.")),
     };
     Ok(Decision {
@@ -215,6 +266,16 @@ pub fn describe(a: &Action, snap: &UiSnapshot, lang: Lang) -> String {
         }
         Action::Done(_) => tr(lang, "Gotowe", "Done").to_string(),
         Action::AskUser(q) => clip(q, 80),
+        Action::Browser(op) => match op {
+            BrowserOp::ListTabs => tr(lang, "Sprawdzam karty…", "Checking the tabs…").to_string(),
+            BrowserOp::Open { url: Some(u), .. } | BrowserOp::Navigate(u) => {
+                let u = clip(u, 40);
+                tr(lang, format!("Otwieram {u}…"), format!("Opening {u}…"))
+            }
+            BrowserOp::Open { .. } => tr(lang, "Przełączam kartę…", "Switching tabs…").to_string(),
+            BrowserOp::ReadPage => tr(lang, "Czytam stronę…", "Reading the page…").to_string(),
+            BrowserOp::GetElements => tr(lang, "Patrzę na stronę…", "Looking at the page…").to_string(),
+        },
     }
 }
 
@@ -251,6 +312,17 @@ pub fn history_line(d: &Decision, snap: &UiSnapshot) -> String {
         Action::ReadText(id) => format!("read_text {}", t(&Target::Id(*id))),
         Action::Done(s) => format!("done \"{}\"", clip(s, 80)),
         Action::AskUser(q) => format!("ask_user \"{}\"", clip(q, 80)),
+        Action::Browser(op) => match op {
+            BrowserOp::ListTabs => "browser_list_tabs".into(),
+            BrowserOp::Open { url, tab } => format!(
+                "browser_open{}{}",
+                url.as_deref().map(|u| format!(" {}", clip(u, 80))).unwrap_or_default(),
+                tab.map(|t| format!(" tab {t}")).unwrap_or_default()
+            ),
+            BrowserOp::Navigate(u) => format!("browser_navigate {}", clip(u, 80)),
+            BrowserOp::ReadPage => "browser_read_page".into(),
+            BrowserOp::GetElements => "browser_get_elements".into(),
+        },
     }
 }
 
@@ -298,6 +370,29 @@ mod tests {
         assert!(parse("scroll", &json!({ "direction": "sideways" })).is_err());
         assert!(parse("run_shell", &json!({ "cmd": "rm -rf" })).is_err());
         assert!(parse("ask_user", &json!({ "question": "  " })).is_err());
+    }
+
+    #[test]
+    fn parses_browser_functions() {
+        let d = parse("browser_click", &json!({ "id": 6 })).unwrap();
+        assert_eq!(d.action, Action::Click { target: Target::Id(6), button: MouseButton::Left, count: 1 });
+        assert_eq!(d.name, "browser_click");
+        assert_eq!(
+            parse("browser_fill", &json!({ "id": 3, "text": "Łódź" })).unwrap().action,
+            Action::TypeText { target: Some(Target::Id(3)), text: "Łódź".into(), clear: true, submit: false }
+        );
+        assert_eq!(
+            parse("browser_open", &json!({ "url": "example.com" })).unwrap().action,
+            Action::Browser(BrowserOp::Open { url: Some("https://example.com".into()), tab: None })
+        );
+        assert_eq!(parse("browser_open", &json!({ "tab_id": 2 })).unwrap().action, Action::Browser(BrowserOp::Open { url: None, tab: Some(2) }));
+        assert!(parse("browser_open", &json!({})).is_err());
+        assert!(parse("browser_navigate", &json!({ "url": "javascript:alert(1)" })).is_err());
+        assert!(parse("browser_navigate", &json!({ "url": "file:///C:/Windows" })).is_err());
+        assert!(parse("browser_scroll", &json!({ "direction": "left" })).is_err());
+        assert!(parse("browser_click", &json!({})).is_err());
+        assert!(!parse("browser_read_page", &json!({})).unwrap().action.acts());
+        assert!(parse("browser_navigate", &json!({ "url": "https://example.com" })).unwrap().action.acts());
     }
 
     #[test]

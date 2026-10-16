@@ -16,6 +16,9 @@ pub mod intent;
 pub mod killswitch;
 pub mod prompt;
 pub mod safety;
+pub mod vio;
+#[cfg(test)]
+mod vio_mock;
 
 pub use intent::is_computer_task;
 
@@ -90,6 +93,10 @@ pub trait Host {
     fn capture_exclusion(&self, on: bool);
     /// Debug dump directory (opt-in), cleared per task.
     fn debug_dir(&self) -> Option<std::path::PathBuf>;
+    /// The Vio browser API client (browser tasks skip UI Automation when it is connected).
+    fn vio(&self) -> Option<Arc<vio::Client>> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +133,7 @@ struct Run<'a> {
     note: Option<String>,
     monitors: Vec<Monitor>,
     debug: Option<std::path::PathBuf>,
+    vio: Option<Arc<vio::Client>>,
 }
 
 /// Restores capture exclusion when the task ends (any path).
@@ -159,6 +167,7 @@ pub fn run_task(host: &dyn Host, task: &str) -> Outcome {
         monitors: Vec::new(),
         debug: if cfg.debug_screenshots { host.debug_dir() } else { None },
         cfg,
+        vio: host.vio(),
     };
     if !run.cfg.enabled {
         return run.finish(
@@ -259,6 +268,36 @@ impl Run<'_> {
         }
     }
 
+    /// This step goes to Vio: connected (after the consent wait) and Vio is in front or the task
+    /// names the browser. Otherwise UI Automation as usual.
+    fn vio_step(&self) -> Option<(Arc<vio::Client>, Option<crate::platform::ui::WindowInfo>)> {
+        let c = self.vio.as_ref()?;
+        let state = c.status().state;
+        if state == vio::State::Unavailable {
+            return None;
+        }
+        let fg = self.platform.foreground_window().filter(|w| (w.pid != 0 && w.pid == c.pid()) || vio::is_vio_process(&w.process));
+        if fg.is_none() && !intent::names_browser(&self.task) {
+            return None;
+        }
+        if state == vio::State::Authorizing {
+            self.progress(Phase::Running, tr(self.lang, "Zezwól w Vio…", "Allow it in Vio…"));
+            if let Err(e) = c.wait_ready(vio::AUTH_TIMEOUT) {
+                eprintln!("[soul][agent] vio not ready: {e} — UI Automation");
+                return None;
+            }
+        }
+        Some((Arc::clone(c), fg))
+    }
+
+    /// Active tab + its elements as a snapshot.
+    fn vio_snapshot(&self, c: &vio::Client, window: Option<crate::platform::ui::WindowInfo>) -> Result<(UiSnapshot, i64), String> {
+        let tabs = c.call("listTabs", serde_json::json!({}))?;
+        let (tab, id) = vio::active_tab(&tabs).ok_or("Vio has no open tab.")?;
+        let elements = c.call("getElements", serde_json::json!({ "tabId": id }))?;
+        Ok((vio::snapshot(&tab, &elements, window), id))
+    }
+
     /// Region of the window the screenshot (and vision coordinates) refer to.
     fn region(&self, s: &UiSnapshot) -> Rect {
         let mon = if s.window.monitor.is_empty() {
@@ -353,9 +392,24 @@ impl Run<'_> {
             let step_t0 = Instant::now();
             self.progress(Phase::Running, tr(self.lang, "Patrzę na ekran…", "Looking at the screen…"));
 
-            let snap = match self.snapshot() {
-                Ok(s) => s,
-                Err(e) => return self.finish(Err(e), Phase::Failed),
+            let vio = self.vio_step();
+            let (snap, tab) = match vio.as_ref().map(|(c, w)| self.vio_snapshot(c, w.clone())) {
+                Some(Ok((s, tab))) => (s, Some(tab)),
+                Some(Err(e)) if e == crate::platform::input::ABORTED => return self.aborted_outcome(),
+                // Private / Tor / internal tab: tell the user, never fall back to the screen.
+                Some(Err(e)) if vio::is_forbidden(&e) => {
+                    self.log("vio", &e, false, 0, false, false);
+                    return self.finish(Err(vio::forbidden_message(self.lang, &e)), Phase::Failed);
+                }
+                other => {
+                    if let Some(Err(e)) = other {
+                        eprintln!("[soul][agent] vio snapshot failed: {e} — UI Automation");
+                    }
+                    match self.snapshot() {
+                        Ok(s) => (s, None),
+                        Err(e) => return self.finish(Err(e), Phase::Failed),
+                    }
+                }
             };
             if killswitch::aborted() {
                 return self.aborted_outcome();
@@ -369,7 +423,7 @@ impl Run<'_> {
                 self.log("—", &r, false, 0, false, false);
                 return self.finish(Err(r), Phase::Failed);
             }
-            let vision = snap.source == Source::None || snap.is_useless();
+            let vision = tab.is_none() && (snap.source == Source::None || snap.is_useless());
             // 0–1000 coordinates refer to what the model saw: the screenshot when there is one.
             let mut region = self.region(&snap);
 
@@ -383,7 +437,7 @@ impl Run<'_> {
                     d
                 }
                 None => {
-                    let need_image = self.step == 1 || vision || self.last_failed || self.want_look;
+                    let need_image = tab.is_none() && (self.step == 1 || vision || self.last_failed || self.want_look);
                     let shot = if need_image { self.screenshot(&snap, vision) } else { None };
                     shot_taken = shot.is_some();
                     if let Some(sh) = &shot {
@@ -517,6 +571,7 @@ impl Run<'_> {
                     region,
                     monitors: &self.monitors,
                     highlight: self.cfg.highlight,
+                    vio: vio.as_ref().map(|(c, _)| c.as_ref()).zip(tab),
                 },
                 &decision,
                 confirmed,
@@ -555,6 +610,10 @@ impl Run<'_> {
                 Err(e) => {
                     if e == crate::platform::input::ABORTED {
                         return self.aborted_outcome();
+                    }
+                    if vio::is_forbidden(&e) {
+                        self.log(&line, &e, false, ms, from_model, shot_taken);
+                        return self.finish(Err(vio::forbidden_message(self.lang, &e)), Phase::Failed);
                     }
                     self.fails_in_row += 1;
                     self.last_failed = true;

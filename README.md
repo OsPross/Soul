@@ -152,6 +152,9 @@ accessibility) or after a failed step. Simple media / volume / timer / open-clos
   Security, UAC, terminals, Run dialog — Settings → Agent), Win+R / Win+X, fullscreen games unless you name them.
   On-screen text is treated as data, never as instructions.
 - **Stop:** Esc twice, the talk key, the mouse jammed into a screen corner, or **Zatrzymaj** on the Island.
+- **Vio browser:** with Vio's automation API on (`%APPDATA%\moja-przegladarka\automation.json`), browser tasks
+  („otwórz w przeglądarce X”, „streść tę stronę”, „sprawdź które pola są puste”) use the API instead of the screen;
+  approve Soul once in Vio's consent dialog. Status: Settings → Agent. Without Vio nothing changes.
 - Wayland: not supported (clear message). Test harness: `npm run test:agent [-- --real]` → `tests/agent/report.md`
   (takes over mouse and keyboard for a few minutes). Design: [`docs/agent.md`](docs/agent.md).
 

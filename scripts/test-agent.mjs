@@ -1,6 +1,7 @@
 // npm run test:agent            → Soul Agent harness on tests/agent/playground.html (real Gemini API)
 // npm run test:agent -- --real  → also the real Windows tasks (Notepad, Settings → Sound)
-// npm run test:agent -- --only=search → one playground task
+// npm run test:agent -- --only=search → one playground task (--only=vio → only the Vio mock-API cases)
+// Always also runs the Vio browser cases against a mock Vio API (tests/agent/vio-mock.json, no desktop input).
 // Key: SOUL_TEST_KEY, else the key saved in Soul's settings (never printed).
 // Takes over mouse + keyboard for a few minutes. Esc twice / mouse in a corner stops a task.
 import { spawnSync } from "node:child_process";

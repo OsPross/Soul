@@ -662,6 +662,7 @@ pub fn run() {
             agent::agent_stop,
             agent::agent_get_config,
             agent::agent_save_config,
+            agent::agent_vio_status,
             agent::agent_default_blocklist,
             agent::agent_debug_log,
             agent::agent_clear_log,
@@ -749,6 +750,8 @@ pub fn run() {
             eprintln!("[soul] starting with {}", redact_settings(&settings));
             // Offline wake word listener (idle until enabled and trained).
             wake::init(app.handle(), &settings);
+            // Vio browser API (idle until its automation.json appears).
+            agent::computer::vio::init(app.handle(), agent::computer::config::load(app.handle()).enabled);
             #[cfg(debug_assertions)]
             dev_transcript_watcher(app.handle().clone());
             app.state::<AppState>().voice.set_volume(settings.voice_volume);

@@ -42,6 +42,8 @@ src-tauri/src/
     computer/config.rs  AgentConfig (store key `computerAgent`), autosaved from Settings → Agent
     computer/killswitch.rs  double Esc / talk key / corner / "stop" → abort flag; pure detector
     computer/harness.rs opt-in harness (`npm run test:agent`) + real-task probes
+    computer/vio.rs     Vio browser automation API: discovery, WebSocket actor, page → snapshot
+    computer/vio_mock.rs  mock Vio server + fake desktop; Vio cases (cargo test + harness)
 src/
   island/AgentStage.tsx   Island "agent" card: spirit (thinking), step text, n/20, progress, Stop
   agent/Highlight.tsx     click-through ring overlay (window `agent-highlight`)
@@ -49,6 +51,7 @@ src/
 tests/agent/
   playground.html  buttons, inputs, scroll list, fake „Wyślij”, hidden prompt injection
   tasks.json       scripted harness tasks + expectations
+  vio-mock.json    mock Vio tabs / elements + Vio cases (scripted calls for cargo test)
   report.md        written by the harness
 ```
 
@@ -238,6 +241,46 @@ Verdicts are computed locally in `safety.rs` and combined with the model's `risk
 - Settings → Agent: enable, max steps, highlight, confirmation level, blocklist editor, model,
   debug log of recent steps (+ opt-in screenshot dump).
 
+## 6b. Vio browser (automation API)
+
+When the user's Electron browser **Vio** has its automation API on, browser steps go through it
+instead of UI Automation + screenshots (faster, exact, no mouse).
+
+- **Discovery:** Vio writes `{port, token, pid}` to `%APPDATA%\moja-przegladarka\automation.json`
+  (Linux `~/.config/moja-przegladarka/automation.json`) only while the API is on. `vio::init` (app
+  setup, only while the agent is enabled) starts an actor on Tauri's tokio runtime that polls the
+  file every 2 s, checks the pid (`platform::pid_alive`), connects to `ws://127.0.0.1:port` (no Origin
+  header) and sends `{cmd:"auth", token}`. Vio may show a consent dialog: Soul waits up to 30 s and
+  shows „Zezwól w Vio” on the Island (toast; inside a task also the agent card). A refused / unanswered
+  auth is not retried for that token (no dialog spam) until the file changes or the agent is
+  switched off and on. The connection drops when the file disappears or the pid dies and comes back
+  when it reappears. Settings → Agent shows „Przeglądarka Vio: połączona / niedostępna”
+  (`agent_vio_status`).
+- **Protocol:** `{id, cmd, args}` → `{id, ok, result|error}`; `Client::call` is blocking for the
+  agent thread, 10 s per call, aborted by the kill switch, ≥ 50 ms between commands (Vio allows
+  20/s). The token is never logged and `gemini::redact_secrets` scrubs it (`vio::redact`).
+- **When:** per step — Vio connected and (the foreground window is Vio's pid / `vio.exe`, or the task
+  names the browser: „w przeglądarce”, „karta”, „Vio”, `intent::names_browser`). Otherwise the
+  normal UIA path; if `listTabs` / `getElements` fail (other than „forbidden”) the step falls back
+  to UIA too.
+- **Observation:** `listTabs` → active tab, `getElements` → `UiSnapshot { source: Vio }` (ref in
+  `automation_id`, title = „title — URL” so the blocklist sees bank domains, no rects, no
+  screenshot). Lines carry `empty` for empty form fields („sprawdź które pola są puste” is answered
+  from the list). Ids are renumbered every step, so expired refs heal on the next step.
+- **Tools (MODE browser):** `browser_list_tabs`, `browser_open {url | tab_id}` (openTab /
+  activateTab — wakes sleeping tabs), `browser_navigate`, `browser_read_page` (getPage → READ, up to
+  8000 chars), `browser_get_elements`, `browser_click {id}`, `browser_fill {id, text, submit}`,
+  `browser_key` (focuses Vio's window first), `browser_scroll up|down`, plus open_app / focus_app /
+  open_settings / wait / done / ask_user. Click / fill / key / scroll parse into the ordinary
+  actions, so `local_plan`, `safety::check_step` (Wyślij / Kup / Usuń / **Zaloguj** confirm, password
+  fields and secrets refused), the 20-step limit, history and the kill switch are unchanged. URLs:
+  http(s) only (`vio::normalize_url`).
+- **„forbidden”** (private / Tor / internal tabs, password fields) ends the task with a clear message
+  — never worked around, never retried through the screen.
+- **Voice:** while Vio is connected `intent::is_browser_phrase` makes „otwórz w przeglądarce X”,
+  „przeczytaj / streść tę stronę”, „wypełnij formularz”, „sprawdź które pola są puste” computer
+  tasks (Smart talk key: ≤ 8 words).
+
 ## 7. Testing
 
 - Unit: router intents + traps, risk verdicts, blocklist, coordinate mapping (DPI 100/125/150,
@@ -249,6 +292,11 @@ Verdicts are computed locally in `safety.rs` and combined with the model's `risk
   `tests/agent/report.md` (success rate, steps, model calls, latency).
 - Real tasks (opt-in, Windows): Notepad (type + save to a temp file), Settings (go to Sound),
   playground — `npm run test:agent -- --real`.
+- Vio: `vio_mock.rs` serves `tests/agent/vio-mock.json` over a real WebSocket on 127.0.0.1 with a
+  fake desktop (Vio in front, no UIA, no input). Cases: auth failure, forbidden tab, expired ref,
+  empty fields, Polish fill, page read, send confirmation, password refusal. `cargo test
+  vio_mock_cases` replays scripted model calls (CI); `npm run test:agent` runs them with the real
+  model and adds a „Vio browser API (mock server)” section to `tests/agent/report.md`.
 
 ## API calls per task (measured, `tests/agent/report.md`, 2026-10-16)
 

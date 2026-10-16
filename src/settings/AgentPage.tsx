@@ -27,6 +27,9 @@ type StepLog = {
   screenshot: boolean;
 };
 
+/** Mirrors `agent::computer::vio::VioStatus`. */
+type VioStatus = { state: "unavailable" | "authorizing" | "connected"; error: string | null };
+
 const SAVE_DEBOUNCE_MS = 400;
 
 /** Settings → Agent: voice-driven computer control. Autosaved (`agent_save_config`). */
@@ -35,10 +38,12 @@ export default function AgentPage({ lang }: { lang: UiLang }) {
   const [error, setError] = useState<string | null>(null);
   const [newEntry, setNewEntry] = useState("");
   const [log, setLog] = useState<StepLog[]>([]);
+  const [vio, setVio] = useState<VioStatus | null>(null);
   const timer = useRef<number | null>(null);
 
   const loadLog = useCallback(() => {
     invoke<StepLog[]>("agent_debug_log").then(setLog).catch(() => undefined);
+    invoke<VioStatus>("agent_vio_status").then(setVio).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -128,6 +133,29 @@ export default function AgentPage({ lang }: { lang: UiLang }) {
             onChange={(e) => update({ model: e.target.value })}
             spellCheck={false}
           />
+        </Row>
+        <Row
+          label={tr(lang, "Przeglądarka Vio", "Vio browser")}
+          hint={
+            vio?.error ??
+            tr(
+              lang,
+              "Gdy Vio ma włączone API automatyzacji, zadania w przeglądarce idą przez nie zamiast przez ekran.",
+              "When Vio's automation API is on, browser tasks go through it instead of the screen.",
+            )
+          }
+          disabled={!cfg.enabled}
+        >
+          <span
+            className="text-[13px]"
+            style={{ color: vio?.state === "connected" ? "var(--soul-success)" : "var(--soul-muted)" }}
+          >
+            {vio?.state === "connected"
+              ? tr(lang, "połączona", "connected")
+              : vio?.state === "authorizing"
+                ? tr(lang, "zezwól w Vio…", "allow it in Vio…")
+                : tr(lang, "niedostępna", "unavailable")}
+          </span>
         </Row>
         <Callout>
           {tr(

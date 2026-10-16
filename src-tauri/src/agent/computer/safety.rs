@@ -94,6 +94,7 @@ const RISK_GROUPS: &[(&[&str], &str)] = &[
         ],
         "utrata zmian / wylogowanie",
     ),
+    (&["zaloguj", "login", "log in", "sign in", "signin"], "logowanie"),
 ];
 
 /// The reason a target's name is risky, if it is. Short words (≤ 5 letters: "post", "order",
@@ -393,7 +394,8 @@ mod tests {
     #[test]
     fn send_buy_delete_buttons_force_confirm_even_unflagged() {
         for name in ["Wyślij", "Send", "Kup teraz", "Zapłać 49,99 zł", "Usuń", "Delete", "Submit", "Prześlij", "Opublikuj",
-            "Zamów i zapłać", "Nie zapisuj", "Don't save", "Odinstaluj", "Wyloguj się", "Przenieś do kosza"]
+            "Zamów i zapłać", "Nie zapisuj", "Don't save", "Odinstaluj", "Wyloguj się", "Przenieś do kosza", "Zaloguj się",
+            "Log in", "Sign in"]
         {
             let s = snap(win("chrome.exe", "Sklep"), vec![el(Role::Button, name, 10)]);
             let v = check_step(&d("click", json!({ "id": 1 })), &s, ConfirmLevel::Risky);

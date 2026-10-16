@@ -75,7 +75,17 @@ pub fn agent_save_config(
     app: AppHandle,
     config: computer::config::AgentConfig,
 ) -> Result<computer::config::AgentConfig, String> {
-    computer::config::save(&app, config)
+    let saved = computer::config::save(&app, config)?;
+    if let Some(vio) = computer::vio::global() {
+        vio.set_enabled(saved.enabled);
+    }
+    Ok(saved)
+}
+
+/// Settings → Agent: „Przeglądarka Vio: połączona / niedostępna”.
+#[tauri::command]
+pub fn agent_vio_status() -> computer::vio::VioStatus {
+    computer::vio::status()
 }
 
 #[tauri::command]

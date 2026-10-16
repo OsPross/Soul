@@ -1704,7 +1704,7 @@ fn format_reqwest_error(
 }
 
 pub(crate) fn redact_secrets(text: &str) -> String {
-    let mut out = text.replace("key=", "key=[redacted]");
+    let mut out = crate::agent::computer::vio::redact(text).replace("key=", "key=[redacted]");
     if let Some(idx) = out.find("AIza") {
         let end = out[idx..]
             .find(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')

@@ -27,6 +27,18 @@ mod windows_hook;
 #[cfg(target_os = "windows")]
 mod windows_uia;
 
+/// The process `pid` is running (Vio discovery: a stale `automation.json` after a crash).
+pub fn pid_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        pid != 0 && self::windows::process_path(pid).is_some()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        pid != 0 && std::path::Path::new(&format!("/proc/{pid}")).exists()
+    }
+}
+
 /// Hints for the animation battery saver. `None` = unknown on this platform.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

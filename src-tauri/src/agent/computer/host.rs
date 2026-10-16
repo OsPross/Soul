@@ -114,4 +114,8 @@ impl Host for AppHost {
     fn debug_dir(&self) -> Option<std::path::PathBuf> {
         self.app.path().app_data_dir().ok().map(|d| d.join("agent-debug"))
     }
+
+    fn vio(&self) -> Option<Arc<super::vio::Client>> {
+        super::vio::global()
+    }
 }

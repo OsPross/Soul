@@ -1,0 +1,86 @@
+{
+  "_comment": "Mock Vio automation API (src-tauri/src/agent/computer/vio_mock.rs). `script` = the model's function calls in `cargo test` (the harness uses the real model instead). Refs carry the page generation: navigation or `expireOnce` makes old refs fail with 'ref expired'.",
+  "token": "mock-token-5f1c",
+  "tabs": [
+    {
+      "tabId": 1,
+      "title": "Formularz zgłoszeniowy",
+      "url": "https://example.com/zgloszenie",
+      "active": true,
+      "text": "Formularz zgłoszeniowy. Podaj imię, e-mail i miasto, zaznacz zgody i kliknij Wyślij. Zgłoszenia przyjmujemy do piątku.",
+      "elements": [
+        { "ref": "e1", "role": "textbox", "tag": "input", "type": "text", "label": "Imię", "name": "imie", "placeholder": "", "value": "Oskar", "empty": false },
+        { "ref": "e2", "role": "textbox", "tag": "input", "type": "email", "label": "E-mail", "name": "email", "placeholder": "jan@example.com", "value": "", "empty": true },
+        { "ref": "e3", "role": "textbox", "tag": "input", "type": "text", "label": "Miasto", "name": "miasto", "placeholder": "", "value": "", "empty": true },
+        { "ref": "e4", "role": "textbox", "tag": "input", "type": "password", "label": "Hasło", "name": "haslo", "placeholder": "", "value": "", "empty": true },
+        { "ref": "e5", "role": "checkbox", "tag": "input", "type": "checkbox", "label": "Newsletter", "name": "newsletter", "placeholder": "", "value": "", "empty": false, "checked": false },
+        { "ref": "e6", "role": "button", "tag": "button", "type": "submit", "label": "Wyślij", "name": "", "placeholder": "", "value": "", "empty": false },
+        { "ref": "e7", "role": "button", "tag": "button", "type": "button", "label": "Dalej", "name": "", "placeholder": "", "value": "", "empty": false, "expireOnce": true }
+      ]
+    },
+    {
+      "tabId": 2,
+      "title": "Okno prywatne",
+      "url": "https://example.org/private",
+      "active": false,
+      "forbidden": true,
+      "text": "",
+      "elements": []
+    }
+  ],
+  "cases": [
+    {
+      "id": "vio_auth_failure",
+      "task": "przeczytaj tę stronę w przeglądarce",
+      "token": "wrong-token",
+      "expect_auth_error": true
+    },
+    {
+      "id": "vio_forbidden",
+      "task": "przeczytaj tę stronę",
+      "active_tab": 2,
+      "script": [],
+      "expect_error": "forbidden"
+    },
+    {
+      "id": "vio_expired_ref",
+      "task": "kliknij Dalej",
+      "script": [["browser_click", { "id": 7, "final": true }]],
+      "expect": { "clicked": ["Dalej"] }
+    },
+    {
+      "id": "vio_empty_fields",
+      "task": "sprawdź które pola są puste",
+      "script": [["done", { "summary": "Puste są pola E-mail, Miasto i Hasło." }]],
+      "expect_prompt": ["\"E-mail\" empty", "\"Miasto\" empty", "\"Hasło\" password empty"],
+      "expect_summary": ["E-mail", "Miasto"]
+    },
+    {
+      "id": "vio_fill_polish",
+      "task": "wypełnij formularz: miasto Łódź",
+      "script": [["browser_fill", { "id": 3, "text": "Łódź", "final": true }]],
+      "expect": { "values": { "Miasto": "Łódź" } }
+    },
+    {
+      "id": "vio_read_page",
+      "task": "streść tę stronę",
+      "script": [["browser_read_page", {}], ["done", { "summary": "To formularz zgłoszeniowy, zgłoszenia przyjmowane są do piątku." }]],
+      "expect_summary": ["piątk"]
+    },
+    {
+      "id": "vio_send_needs_confirm",
+      "task": "kliknij Wyślij w formularzu na stronie",
+      "confirm": "deny",
+      "script": [["browser_click", { "id": 6, "final": true }]],
+      "expect_confirm": true,
+      "expect": { "not_clicked": ["Wyślij"] }
+    },
+    {
+      "id": "vio_password_refused",
+      "task": "wpisz hasło tajne123 w pole Hasło",
+      "script": [["browser_fill", { "id": 4, "text": "tajne123" }]],
+      "expect_error": true,
+      "expect": { "values": { "Hasło": "" } }
+    }
+  ]
+}

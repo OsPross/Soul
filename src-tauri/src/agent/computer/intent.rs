@@ -112,7 +112,38 @@ pub fn is_computer_task(text: &str) -> bool {
     if on_screen && !matches!(first.as_str(), "wyszukaj" | "wygoogluj" | "poszukaj" | "search" | "google") {
         return true;
     }
+    if super::vio::connected() && is_browser_phrase(text) {
+        return true;
+    }
     is_screen_question(&words)
+}
+
+/// Words naming the browser itself (folded): with Vio connected such a task goes to Vio even when
+/// another window is in front.
+const BROWSER_WORDS: &[&str] = &[
+    "przegladarce", "przegladarke", "przegladarka", "przegladarki", "vio", "karte", "karcie", "karty", "browser",
+    "tab", "tabs",
+];
+
+pub fn names_browser(text: &str) -> bool {
+    text.split(|c: char| !c.is_alphanumeric()).map(fold_word).any(|w| BROWSER_WORDS.contains(&w.as_str()))
+}
+
+/// Verbs about a page / form, and the page / form nouns they need.
+const PAGE_VERBS: &[&str] = &[
+    "przeczytaj", "stresc", "streszcz", "podsumuj", "sprawdz", "wypelnij", "read", "summarize", "summarise", "check",
+    "fill",
+];
+const PAGE_NOUNS: &[&str] = &["strone", "stronie", "strony", "formularz", "formularzu", "pola", "pole", "page", "form", "fields"];
+
+/// Browser phrases routed to the agent while Vio is connected: „otwórz w przeglądarce X”,
+/// „przeczytaj / streść tę stronę”, „wypełnij formularz”, „sprawdź które pola są puste”.
+pub fn is_browser_phrase(text: &str) -> bool {
+    let words = words_after_fillers(text);
+    let Some(first) = words.first() else { return false };
+    let has = |set: &[&str]| words.iter().any(|w| set.contains(&w.as_str()));
+    // „otwórz przeglądarkę” alone is the app (router), not a browser task.
+    (names_browser(text) && words.len() >= 3) || (PAGE_VERBS.contains(&first.as_str()) && has(PAGE_NOUNS))
 }
 
 /// Places on the screen (folded, locative): the command is about the UI in front of the user.
@@ -162,6 +193,9 @@ pub fn is_explicit_ui_command(text: &str) -> bool {
         return true;
     }
     if is_screen_question(&words) && words.len() <= 8 {
+        return true;
+    }
+    if words.len() <= 8 && super::vio::connected() && is_browser_phrase(text) {
         return true;
     }
     matches!(first, "przejdz" | "ustaw" | "zmien" | "otworz" | "w" | "go" | "open" | "set" | "change") && is_computer_task(text)
@@ -253,6 +287,29 @@ pub fn local_plan(task: &str, snap: &UiSnapshot) -> Option<Decision> {
 mod tests {
     use super::*;
     use crate::platform::ui::{finalize, Rect, Source, UiElement, WindowInfo, MAX_ELEMENTS};
+
+    #[test]
+    fn browser_phrases() {
+        for t in [
+            "otwórz w przeglądarce youtube.com",
+            "przeczytaj tę stronę",
+            "streść tę stronę",
+            "podsumuj tę stronę",
+            "wypełnij formularz",
+            "sprawdź które pola są puste",
+            "sprawdź, które pola są jeszcze puste",
+            "otwórz nową kartę z pogodą",
+            "read this page",
+            "summarize this page",
+        ] {
+            assert!(is_browser_phrase(t), "{t}");
+        }
+        for t in ["otwórz przeglądarkę", "przeczytaj wiadomość", "streść to", "otwórz spotify", "sprawdź pogodę", "zapłać kartą"] {
+            assert!(!is_browser_phrase(t), "{t}");
+        }
+        assert!(names_browser("otwórz w przeglądarce youtube") && names_browser("w Vio kliknij Zapisz"));
+        assert!(!names_browser("sprawdź które pola są puste") && !names_browser("vivaldi"));
+    }
 
     #[test]
     fn ui_tasks_route_to_the_agent() {

@@ -76,6 +76,10 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   probe thread, talk key (`talk.rs` `on_down`), `agent_stop`. `host.rs` = Tauri `Host` (Island `island://agent`, confirm
   card, `confirm::ask` question card, highlight window `agent-highlight` declared hidden in `tauri.conf.json`, capture exclusion — only on visible windows: `SetWindowDisplayAffinity` on a hidden one leaves a white framed ghost); `harness.rs` = test `Host`.
   Config: store key `computerAgent` (`agent_get_config`/`agent_save_config`, never touched by `save_app_settings`).
+  Vio browser: `vio.rs` (discovery `moja-przegladarka/automation.json`, tokio WS actor, auth ≤ 30 s + Island „Zezwól w Vio”,
+  `Client::call` 10 s / kill switch / 20 cmds/s, token redacted) — a step uses Vio when connected and Vio is in front or
+  `intent::names_browser`; page → `UiSnapshot { source: Vio }` (ref = `automation_id`, `empty` flag), `browser_*` tools
+  parse into the normal actions (same safety/limits), „forbidden” ends the task; `vio_mock.rs` + `tests/agent/vio-mock.json`.
   Platform: `platform/ui.rs` (snapshot model, `finalize`, observation text), `coords.rs`, `input.rs` (`execute` always
   releases keys), `marks.rs` (set-of-marks JPEG), `windows_uia.rs` (UIA worker thread owns all COM objects),
   `linux_atspi.rs` (AT-SPI + enigo, untested on a real desktop), Wayland refuses. Harness: `npm run test:agent [-- --real]`.

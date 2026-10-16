@@ -3,13 +3,14 @@
 //! verifies the expected change and retries once with the other strategy when nothing happened.
 //! A confirmed or risky action is never retried automatically (no double „Wyślij”).
 
-use super::action::{Action, Decision, Target};
-use super::{killswitch, Host};
+use super::action::{Action, BrowserOp, Decision, Target};
+use super::{killswitch, vio, Host};
 use crate::i18n::{tr, Lang};
 use crate::platform::coords::{clamp_off_corners, norm_to_screen, Monitor, Point};
 use crate::platform::input::{self, Combo, InputStep, Key, MouseButton};
 use crate::platform::ui::{clip, ElementOp, QuickState, Rect, Role, SnapshotOptions, UiElement, UiSnapshot, STALE};
 use crate::platform::Platform;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,7 @@ const SETTLE_MIN: Duration = Duration::from_millis(300);
 const SETTLE_STABLE: Duration = Duration::from_millis(240);
 const SETTLE_POLL: Duration = Duration::from_millis(120);
 const HIGHLIGHT_MS: u64 = 320;
+const VIO_SETTLE: Duration = Duration::from_millis(350);
 
 pub struct Cx<'a> {
     pub host: &'a dyn Host,
@@ -27,6 +29,8 @@ pub struct Cx<'a> {
     pub region: Rect,
     pub monitors: &'a [Monitor],
     pub highlight: bool,
+    /// This step goes through the Vio browser API: client + active tab.
+    pub vio: Option<(&'a vio::Client, i64)>,
 }
 
 /// Result of a performed step.
@@ -343,7 +347,68 @@ fn attempt(cx: &Cx, a: &Action, strategy: Strategy) -> Result<Attempt, String> {
         Action::FocusApp(name) => cx.platform.focus_app(name).map(|_| Attempt { used: "focus_app", has_alternate: false }),
         Action::OpenUrl(url) => cx.platform.open_url(url).map(|_| Attempt { used: "open_url", has_alternate: false }),
         Action::Wait(_) | Action::ReadText(_) | Action::Done(_) | Action::AskUser(_) => Ok(Attempt { used: "none", has_alternate: false }),
+        Action::Browser(_) => Err("The Vio browser is not connected.".into()),
     }
+}
+
+/// A Vio step: the API call is the action and its `ok` the verification (no settle polling).
+fn perform_vio(cx: &Cx, c: &vio::Client, tab: i64, d: &Decision) -> Result<Performed, String> {
+    let vref = |t: &Target| match t {
+        Target::Id(id) => cx.snap.get(*id).map(|e| e.automation_id.clone()).ok_or_else(|| "No such element.".to_string()),
+        Target::Point { .. } => Err("Vio needs an element id, not coordinates.".to_string()),
+    };
+    let key = |k: &str| {
+        // Vio wants its window focused for key events.
+        let _ = ensure_foreground(cx);
+        c.call("pressKey", json!({ "tabId": tab, "key": k })).map(|_| ())
+    };
+    let mut read = None;
+    let mut detail = String::new();
+    match &d.action {
+        Action::Click { target, button: MouseButton::Left, count: 1 } => {
+            c.call("click", json!({ "tabId": tab, "ref": vref(target)? }))?;
+        }
+        Action::TypeText { target: Some(t), text, submit, .. } => {
+            c.call("fill", json!({ "tabId": tab, "ref": vref(t)?, "text": text }))?;
+            if *submit {
+                killswitch::sleep(Duration::from_millis(80));
+                key("Enter")?;
+            }
+        }
+        Action::KeyCombo(k) => key(&k.label())?,
+        Action::Scroll { dir, .. } if dir.is_vertical() => {
+            let direction = if *dir == crate::platform::ui::ScrollDir::Up { "up" } else { "down" };
+            c.call("scroll", json!({ "tabId": tab, "direction": direction }))?;
+        }
+        Action::Browser(op) => match op {
+            BrowserOp::ListTabs => read = Some(vio::tabs_text(&c.call("listTabs", json!({}))?)),
+            BrowserOp::Open { url: Some(u), .. } => {
+                let r = c.call("openTab", json!({ "url": u }))?;
+                if let Some(id) = r["tabId"].as_i64() {
+                    c.call("activateTab", json!({ "tabId": id }))?;
+                }
+            }
+            BrowserOp::Open { tab: Some(t), .. } => {
+                c.call("activateTab", json!({ "tabId": t }))?;
+            }
+            BrowserOp::Open { .. } => return Err("browser_open: give a url or a tab_id".into()),
+            BrowserOp::Navigate(u) => {
+                c.call("navigate", json!({ "tabId": tab, "url": u }))?;
+            }
+            BrowserOp::ReadPage => read = Some(vio::page_text(&c.call("getPage", json!({ "tabId": tab }))?)),
+            BrowserOp::GetElements => detail = " (the list is refreshed every turn)".into(),
+        },
+        Action::OpenApp(_) | Action::OpenSettings(_) | Action::FocusApp(_) | Action::OpenUrl(_) => {
+            attempt(cx, &d.action, Strategy::Primary)?;
+        }
+        _ => return Err("Not possible through Vio: use browser_click / browser_fill / browser_scroll with an element id.".into()),
+    }
+    eprintln!("[soul][agent] computer exec {} via=vio", d.name);
+    if d.action.acts() {
+        // Let the page react before the next getElements (navigation renews the refs).
+        killswitch::sleep(VIO_SETTLE);
+    }
+    Ok(Performed { verified: true, detail, read })
 }
 
 /// Poll the cheap state until it is stable (or 2 s). Returns the last state.
@@ -414,6 +479,9 @@ pub fn perform(cx: &Cx, d: &Decision, confirmed: bool) -> Result<Performed, Stri
             return Ok(Performed { verified: true, detail: String::new(), read: None });
         }
         _ => {}
+    }
+    if let Some((c, tab)) = cx.vio {
+        return perform_vio(cx, c, tab, d);
     }
     let target = d.action.target_id();
     let before = cx.platform.ui_quick_state(cx.snap.gen, target).ok();
@@ -510,7 +578,9 @@ pub fn done_text(a: &Action, snap: &UiSnapshot, lang: Lang) -> String {
         Action::OpenApp(n) => tr(lang, format!("Otworzyłem {n}."), format!("Opened {n}.")),
         Action::OpenSettings(p) => tr(lang, format!("Otworzyłem ustawienia: {p}."), format!("Opened settings: {p}.")),
         Action::FocusApp(n) => tr(lang, format!("Przełączyłem na {n}."), format!("Switched to {n}.")),
-        Action::OpenUrl(u) => tr(lang, format!("Otworzyłem {}.", clip(u, 40)), format!("Opened {}.", clip(u, 40))),
+        Action::OpenUrl(u) | Action::Browser(BrowserOp::Open { url: Some(u), .. } | BrowserOp::Navigate(u)) => {
+            tr(lang, format!("Otworzyłem {}.", clip(u, 40)), format!("Opened {}.", clip(u, 40)))
+        }
         _ => tr(lang, "Gotowe.", "Done.").to_string(),
     }
 }

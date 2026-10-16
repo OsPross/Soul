@@ -6,6 +6,16 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+### Added
+
+- **Soul Agent + Vio browser.** When the Vio browser's automation API is on, browser tasks go
+  through it instead of the screen: faster and exact, no mouse. „otwórz w przeglądarce
+  youtube.com”, „przeczytaj / streść tę stronę”, „wypełnij formularz”, „sprawdź które pola są
+  puste” work while Vio is connected. Vio may ask for consent on the first connection — the Island
+  shows „Zezwól w Vio”. Sending, buying, deleting and **logging in** still need a confirmation;
+  private / Tor / internal tabs and password fields are reported, never worked around. Settings →
+  Agent shows „Przeglądarka Vio: połączona / niedostępna”.
+
 ## [0.3.0] - 2026-10-16
 
 ### Added

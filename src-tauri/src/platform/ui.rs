@@ -173,6 +173,8 @@ pub struct UiElement {
     pub web: bool,
     /// Vertical scroll position 0–100 when scrollable.
     pub scroll_pct: Option<f64>,
+    /// Form field without a value (Vio's `empty` flag).
+    pub empty: bool,
     /// Backend index into its element cache (order before `finalize`).
     #[serde(skip)]
     pub backend_index: usize,
@@ -196,6 +198,7 @@ impl UiElement {
             selected: None,
             web: false,
             scroll_pct: None,
+            empty: false,
             backend_index: 0,
         }
     }
@@ -246,6 +249,8 @@ pub enum Source {
     Atspi,
     /// No accessibility data (backend unavailable): vision only.
     None,
+    /// The Vio browser's automation API (`agent/computer/vio.rs`): no rects, `automation_id` = ref.
+    Vio,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -496,13 +501,20 @@ impl UiSnapshot {
             if e.selected == Some(true) {
                 out.push_str(" selected");
             }
+            if e.empty {
+                out.push_str(" empty");
+            }
             if e.caps.scroll {
                 match e.scroll_pct {
                     Some(p) => out.push_str(&format!(" scroll={}%", p.round() as i64)),
                     None => out.push_str(" scrollable"),
                 }
             }
-            out.push_str(&format!(" @{nx},{ny}\n"));
+            if self.source == Source::Vio {
+                out.push('\n');
+            } else {
+                out.push_str(&format!(" @{nx},{ny}\n"));
+            }
         }
         out
     }
