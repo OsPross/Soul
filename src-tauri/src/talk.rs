@@ -360,6 +360,12 @@ impl Worker {
     fn on_down(&mut self, at: Instant) {
         let t0 = Instant::now();
         agent::barge_in(&self.app);
+        // Kill switch: the talk key stops a running computer-agent task (unless the agent is
+        // waiting for a spoken answer — then the key records it, below).
+        if !agent::confirm::is_pending(&self.app) && agent::computer::killswitch::abort("klawisz mówienia") {
+            self.ignore_release = true;
+            return;
+        }
         if let Some(stale) = self.held.take() {
             // Release got lost (shouldn't happen) — never leave the mic running.
             self.cancel(stale, "stale");

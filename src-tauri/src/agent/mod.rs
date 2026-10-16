@@ -2,6 +2,7 @@
 //! Replies are spoken through the Live session's native audio (see `voice.rs`).
 
 mod chain;
+pub(crate) mod computer;
 pub(crate) mod confirm;
 pub(crate) mod context;
 mod intent;
@@ -56,6 +57,40 @@ pub fn new_agent_state() -> AgentState {
 #[tauri::command]
 pub fn agent_confirm(app: AppHandle, accepted: bool) -> Result<(), String> {
     confirm::answer(&app, accepted)
+}
+
+/// Island Stop button: abort the running computer-agent task.
+#[tauri::command]
+pub fn agent_stop() -> bool {
+    computer::killswitch::abort("Stop")
+}
+
+#[tauri::command]
+pub fn agent_get_config(app: AppHandle) -> computer::config::AgentConfig {
+    computer::config::load(&app)
+}
+
+#[tauri::command]
+pub fn agent_save_config(
+    app: AppHandle,
+    config: computer::config::AgentConfig,
+) -> Result<computer::config::AgentConfig, String> {
+    computer::config::save(&app, config)
+}
+
+#[tauri::command]
+pub fn agent_default_blocklist() -> Vec<String> {
+    computer::safety::default_blocklist()
+}
+
+#[tauri::command]
+pub fn agent_debug_log() -> Vec<computer::config::StepLog> {
+    computer::config::recent_steps()
+}
+
+#[tauri::command]
+pub fn agent_clear_log() {
+    computer::config::clear_log();
 }
 
 /// Talk key pressed again while Soul is speaking: stop the audio now and drop the rest of the
@@ -117,6 +152,9 @@ pub fn classify_smart(
     };
     if text_action::parse(text).is_some() {
         return command("text-action");
+    }
+    if computer::intent::is_explicit_ui_command(text) {
+        return command("computer-task");
     }
     if context::is_reset_phrase(text) {
         return command("context-reset");
@@ -227,6 +265,9 @@ pub fn on_agent_pressed(app: &AppHandle) {
     barge_in(app);
     if confirm::is_pending(app) {
         confirm::begin_answer(app);
+        return;
+    }
+    if computer::killswitch::abort("skrót komend") {
         return;
     }
     if *state.busy.lock() {
@@ -470,6 +511,9 @@ fn text_command(
     context::note_user(text);
     auto_remember(app, text);
 
+    if computer::is_computer_task(text) {
+        return computer_command(app, text);
+    }
     // The previous exchanges (taken before this command adds its own).
     let ctx = context::active_block(&settings);
     if let Some(local) = local_dispatch(app, platform, text) {
@@ -487,6 +531,7 @@ fn text_command(
             result: local.result,
             tail: Some((rx, id)),
             late: None,
+            speak_after: None,
         };
     }
 
@@ -504,6 +549,10 @@ fn text_command(
             LiveAgentOutcome::Quiet(result) => {
                 live.commands.cancel_turn_id(id);
                 return CommandOutcome::done(result);
+            }
+            LiveAgentOutcome::Computer(task) => {
+                live.commands.cancel_turn_id(id);
+                return computer_command(app, &task);
             }
             LiveAgentOutcome::TranscriptOnly(_) | LiveAgentOutcome::Failed(_) => {
                 live.commands.finish_turn_id(id);
@@ -527,6 +576,8 @@ struct CommandOutcome {
     /// The model ran these calls (name, args): its further calls in the same turn are the
     /// rest of a chained command and still run (up to `MAX_ACTIONS` in all).
     late: Option<Vec<(String, Value)>>,
+    /// Spoken once `busy` is released (computer-agent summary).
+    speak_after: Option<String>,
 }
 
 impl CommandOutcome {
@@ -536,6 +587,7 @@ impl CommandOutcome {
             tail: None,
             handled: String::new(),
             late: None,
+            speak_after: None,
         }
     }
 
@@ -554,6 +606,7 @@ impl CommandOutcome {
             result,
             tail: Some(tail),
             handled,
+            speak_after: None,
         }
     }
 }
@@ -641,6 +694,34 @@ fn finish_command(
         (Ok(_), false) => 2_500,
     };
     schedule_hide(app, hide_ms);
+    if let Some(summary) = outcome.speak_after.filter(|s| !s.trim().is_empty()) {
+        speak_notice(app, &summary);
+    }
+}
+
+/// A command routed to the computer agent (`computer_task`): run the loop on this worker
+/// thread (it holds `busy`), show the result, and speak a one-sentence summary afterwards.
+fn computer_command(app: &AppHandle, text: &str) -> CommandOutcome {
+    eprintln!("[soul][agent] router=computer_task");
+    crate::island::set_activity(crate::island::Activity::Agent);
+    let host = computer::host::AppHost::new(app);
+    let out = computer::run_task(&host, text);
+    eprintln!(
+        "[soul][agent] computer_task done steps={} model_calls={} screenshots={} request_kb={} ms={}",
+        out.steps,
+        out.model_calls,
+        out.screenshots,
+        out.request_bytes / 1024,
+        out.ms
+    );
+    let summary = out.summary.clone();
+    CommandOutcome {
+        result: if out.aborted { Ok(out.summary) } else { out.result },
+        tail: None,
+        handled: String::new(),
+        late: None,
+        speak_after: Some(summary),
+    }
 }
 
 /// Plays the spoken reply of one Live turn and mirrors its transcript on the Island.
@@ -791,6 +872,8 @@ enum LiveAgentOutcome {
     Done(Result<String, String>, Option<Vec<(String, Value)>>),
     /// Handled locally without a spoken reply (text action): cancel the Live turn.
     Quiet(Result<String, String>),
+    /// A computer-agent task: cancel the Live turn, then run the agent (long, own voice summary).
+    Computer(String),
     /// Live produced a transcript but no decision in time — run REST tools on the transcript.
     TranscriptOnly(String),
     /// Nothing usable from Live — transcribe the WAV over REST.
@@ -829,6 +912,10 @@ fn run_agent_session(
                 live.commands.cancel_turn_id(id);
                 return CommandOutcome::done(result);
             }
+            LiveAgentOutcome::Computer(task) => {
+                live.commands.cancel_turn_id(id);
+                return computer_command(app, &task);
+            }
             LiveAgentOutcome::TranscriptOnly(t) => {
                 live.commands.finish_turn_id(id);
                 eprintln!("[soul][agent] Live gave no decision — REST tools on transcript");
@@ -864,6 +951,9 @@ fn run_agent_session(
     }
     context::note_user(&transcript);
     auto_remember(app, &transcript);
+    if computer::is_computer_task(&transcript) {
+        return computer_command(app, &transcript);
+    }
     if let Some(local) = local_dispatch(app, platform, &transcript) {
         return CommandOutcome::done(local.result);
     }
@@ -907,6 +997,9 @@ fn try_pre_router(
     platform: &Arc<dyn crate::platform::Platform>,
     transcript: &str,
 ) -> Option<LiveAgentOutcome> {
+    if computer::is_computer_task(transcript) {
+        return Some(LiveAgentOutcome::Computer(transcript.trim().to_string()));
+    }
     let local = local_dispatch(app, platform, transcript)?;
     Some(if local.speak {
         LiveAgentOutcome::Done(local.result, None)
@@ -1099,6 +1192,13 @@ fn handle_live_calls(
     try_router: bool,
 ) -> LiveAgentOutcome {
     log_live_final(app, released, heard, "tool_call");
+    if try_router && computer::is_computer_task(heard) {
+        live.commands.send_tool_responses(skipped_responses(
+            calls,
+            "Handled by Soul's computer agent; say nothing now.",
+        ));
+        return LiveAgentOutcome::Computer(heard.to_string());
+    }
     if try_router && !heard.is_empty() {
         if let Some(local) = local_dispatch(app, platform, heard) {
             let summary = if local.speak {
@@ -1450,6 +1550,9 @@ pub(crate) fn preview_plan(
             vec![(context::TEXT_ACTION_TOOL.into(), action.args())],
             "text-action".into(),
         ));
+    }
+    if computer::is_computer_task(text) {
+        return Some((vec![(computer::TOOL_NAME.into(), json!({ "task": text }))], "computer-task".into()));
     }
     if let Some(last) = context::last_tool(settings) {
         if let Some(r) = context::resolve_followup(text, &last) {

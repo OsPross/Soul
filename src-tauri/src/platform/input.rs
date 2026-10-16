@@ -4,8 +4,6 @@
 //! and ą/ć/ę/ł/ń/ó/ś/ź/ż (and emoji, as surrogate pairs) type correctly. [`execute`] checks the
 //! abort flag between steps and always releases every key / button it pressed.
 
-#![allow(dead_code)] // TEMP(phase 1): wired up by the agent loop in phase 2
-
 use super::coords::Point;
 use super::ui::ScrollDir;
 

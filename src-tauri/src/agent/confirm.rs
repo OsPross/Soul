@@ -21,6 +21,9 @@ pub struct Pending {
     tx: Sender<bool>,
     /// The question on the card („Zamknąć Discord?”), re-shown after an unclear spoken answer.
     message: String,
+    /// A free-text question (computer agent `ask_user`): the spoken answer goes here instead of
+    /// being parsed as yes / no.
+    answer_tx: Option<Sender<String>>,
 }
 
 /// A spoken answer is being recorded.
@@ -50,7 +53,7 @@ pub fn parse_answer(text: &str) -> Option<bool> {
 
 /// While a confirmation waits, only the confirm card itself may be shown.
 pub fn overlay_allowed(pending: bool, state: &str) -> bool {
-    !pending || state == "confirm"
+    !pending || state == "confirm" || state == "question"
 }
 
 pub fn is_pending(app: &AppHandle) -> bool {
@@ -81,6 +84,7 @@ pub fn request(app: &AppHandle, message: &str) -> Result<bool, String> {
     *app.state::<AppState>().agent.pending_confirm.lock() = Some(Pending {
         tx,
         message: message.to_string(),
+        answer_tx: None,
     });
     let _ = emit_overlay(app, "confirm", Some(message.to_string()));
     if let Some(win) = app.get_webview_window("overlay") {
@@ -103,6 +107,43 @@ pub fn request(app: &AppHandle, message: &str) -> Result<bool, String> {
         },
     );
     Ok(accepted)
+}
+
+/// Show a question card and wait (≤ 30 s) for a spoken answer on the talk key. `None` = no
+/// answer, cancelled (button / Esc) or nothing intelligible.
+pub fn ask(app: &AppHandle, question: &str) -> Option<String> {
+    let (tx, cancel_rx) = mpsc::channel();
+    let (atx, arx) = mpsc::channel();
+    *app.state::<AppState>().agent.pending_confirm.lock() = Some(Pending {
+        tx,
+        message: question.to_string(),
+        answer_tx: Some(atx),
+    });
+    let _ = emit_overlay(app, "question", Some(question.to_string()));
+    let deadline = Instant::now() + CONFIRM_TIMEOUT;
+    let answer = loop {
+        if let Ok(a) = arx.recv_timeout(Duration::from_millis(100)) {
+            break Some(a);
+        }
+        // Cancel button / Esc resolve the pending entry through `answer(…, false)`.
+        if cancel_rx.try_recv().is_ok() || Instant::now() >= deadline {
+            break None;
+        }
+        if crate::agent::computer::killswitch::aborted() {
+            break None;
+        }
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.agent.pending_confirm.lock() = None;
+    }
+    let _ = app.emit(
+        "overlay://state",
+        OverlayPayload {
+            state: "thinking".into(),
+            message: None,
+        },
+    );
+    answer.map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
 }
 
 /// „Zamknąć Discord?”
@@ -163,6 +204,24 @@ pub fn on_answer_released(app: &AppHandle) {
         live.dictation.finish_turn();
         let text = heard.map(|h| h.text).unwrap_or_default();
         crate::island::set_activity(crate::island::Activity::Command);
+        // A free-text question takes the whole answer.
+        let question = app
+            .state::<AppState>()
+            .agent
+            .pending_confirm
+            .lock()
+            .as_ref()
+            .and_then(|p| p.answer_tx.clone().map(|tx| (tx, p.message.clone())));
+        if let Some((tx, message)) = question {
+            if text.trim().is_empty() {
+                let hint = tr(ui_lang(&settings), "Nie usłyszałem — przytrzymaj klawisz i odpowiedz.", "I didn't catch that — hold the key and answer.");
+                let _ = emit_overlay(&app, "question", Some(format!("{message} {hint}")));
+            } else {
+                eprintln!("[soul][agent] question answered by voice ({} chars)", text.chars().count());
+                let _ = tx.send(text);
+            }
+            return;
+        }
         match parse_answer(&text) {
             Some(accepted) => {
                 eprintln!(
@@ -216,8 +275,9 @@ mod tests {
             assert!(!overlay_allowed(true, state), "{state}");
             assert!(overlay_allowed(false, state), "{state}");
         }
-        // …except the card itself (re-shown with a hint).
+        // …except the card itself (re-shown with a hint) and an agent question.
         assert!(overlay_allowed(true, "confirm"));
+        assert!(overlay_allowed(true, "question"));
     }
 
     #[test]

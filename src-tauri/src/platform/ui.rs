@@ -5,8 +5,6 @@
 //! backend hands the agent the same shape. [`UiSnapshot::observation`] is the compact text the
 //! model sees every step; passwords never carry a value.
 
-#![allow(dead_code)] // TEMP(phase 1): wired up by the agent loop in phase 2
-
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -461,10 +459,7 @@ impl UiSnapshot {
     /// Element centre in 0–1000 window-normalized coordinates (same frame as the screenshot).
     pub fn norm_center(&self, e: &UiElement) -> (i32, i32) {
         let (cx, cy) = e.rect.center();
-        let r = &self.window.rect;
-        let nx = ((cx - r.x) as f64 * 1000.0 / r.w.max(1) as f64).round() as i32;
-        let ny = ((cy - r.y) as f64 * 1000.0 / r.h.max(1) as f64).round() as i32;
-        (nx.clamp(0, 1000), ny.clamp(0, 1000))
+        super::coords::screen_to_norm(super::coords::Point::new(cx, cy), self.window.rect)
     }
 
     /// Compact text for the model, one element per line:

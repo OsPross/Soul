@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AnimationProvider } from "./anim/AnimationProvider";
+import Highlight from "./agent/Highlight";
 import AskView from "./ask/AskView";
 import Island from "./island/Island";
 import Overlay from "./overlay/Overlay";
@@ -26,6 +27,8 @@ export default function App() {
         <AskView />
       ) : label === "island" ? (
         <Island />
+      ) : label === "agent-highlight" ? (
+        <Highlight />
       ) : (
         <Overlay />
       )}

@@ -838,6 +838,20 @@ public class SoulMedia {{
         super::windows_uia::monitors()
     }
 
+    fn open_settings_page(&self, page: &str) -> Result<String, String> {
+        let (uri, _) = super::apps::settings_page(page).ok_or_else(|| format!("Unknown settings page '{page}'."))?;
+        shell_open(&format!("ms-settings:{uri}")).map_err(|e| format!("Opening settings failed: {e}"))?;
+        Ok(format!("Opened settings: {uri}"))
+    }
+
+    fn prepare_overlay_window(&self, window_id: u64) {
+        super::windows_uia::prepare_overlay(window_id);
+    }
+
+    fn show_overlay_window(&self, window_id: u64, show: bool) -> bool {
+        super::windows_uia::show_overlay(window_id, show)
+    }
+
     fn exclude_from_capture(&self, window_id: u64, on: bool) -> Result<(), String> {
         super::windows_uia::exclude_from_capture(window_id, on)
     }

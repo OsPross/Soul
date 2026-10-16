@@ -445,3 +445,59 @@ pub fn validate_http_url(url: &str) -> Result<String, String> {
     }
     Ok(url.to_string())
 }
+
+/// Settings pages the agent may open (`open_settings`), by a short name in English or Polish:
+/// `(Windows ms-settings: page, gnome-control-center panel)`. Anything else is refused — no
+/// arbitrary URI schemes or commands.
+pub fn settings_page(page: &str) -> Option<(&'static str, &'static str)> {
+    let key: String = page
+        .trim()
+        .trim_start_matches("ms-settings:")
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .map(|c| crate::agent::fold_word(&c.to_string()))
+        .collect::<String>()
+        .to_lowercase();
+    Some(match key.as_str() {
+        "sound" | "audio" | "dzwiek" | "dzwieki" | "glosnik" | "mikrofon" | "microphoneinput" => ("sound", "sound"),
+        "display" | "screen" | "ekran" | "wyswietlacz" | "monitor" => ("display", "display"),
+        "bluetooth" => ("bluetooth", "bluetooth"),
+        "network" | "networkstatus" | "siec" | "internet" => ("network-status", "network"),
+        "wifi" | "wlan" => ("network-wifi", "wifi"),
+        "apps" | "appsfeatures" | "aplikacje" => ("appsfeatures", "applications"),
+        "notifications" | "powiadomienia" => ("notifications", "notifications"),
+        "power" | "powersleep" | "battery" | "zasilanie" | "bateria" => ("powersleep", "power"),
+        "storage" | "storagesense" | "pamiec" | "dysk" => ("storagesense", "info-overview"),
+        "personalization" | "personalizacja" => ("personalization", "background"),
+        "background" | "wallpaper" | "tlo" | "tapeta" => ("personalization-background", "background"),
+        "colors" | "kolory" => ("personalization-colors", "background"),
+        "themes" | "motywy" | "motyw" => ("themes", "background"),
+        "mouse" | "mousetouchpad" | "mysz" | "touchpad" => ("mousetouchpad", "mouse"),
+        "keyboard" | "typing" | "klawiatura" | "pisanie" => ("typing", "keyboard"),
+        "privacy" | "prywatnosc" => ("privacy", "privacy"),
+        "microphone" | "privacymicrophone" | "mikrofonprywatnosc" => ("privacy-microphone", "privacy"),
+        "camera" | "webcam" | "privacywebcam" | "kamera" => ("privacy-webcam", "privacy"),
+        "windowsupdate" | "update" | "updates" | "aktualizacje" | "aktualizacja" => ("windowsupdate", "info-overview"),
+        "datetime" | "dateandtime" | "data" | "czas" | "dataiczas" => ("dateandtime", "datetime"),
+        "language" | "regionlanguage" | "jezyk" | "region" => ("regionlanguage", "region"),
+        "accounts" | "yourinfo" | "konta" | "konto" => ("yourinfo", "user-accounts"),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod settings_page_tests {
+    use super::settings_page;
+
+    #[test]
+    fn allowlisted_pages_only() {
+        assert_eq!(settings_page("sound"), Some(("sound", "sound")));
+        assert_eq!(settings_page("Dźwięk"), Some(("sound", "sound")));
+        assert_eq!(settings_page("ms-settings:display"), Some(("display", "display")));
+        assert_eq!(settings_page("Windows Update"), Some(("windowsupdate", "info-overview")));
+        assert_eq!(settings_page("tapeta"), Some(("personalization-background", "background")));
+        assert!(settings_page("cmd /c calc").is_none());
+        assert!(settings_page("file:///C:/Windows").is_none());
+        assert!(settings_page("").is_none());
+    }
+}

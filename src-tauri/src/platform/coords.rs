@@ -4,8 +4,6 @@
 //! screenshot pixels, logical (DPI-scaled) points and SendInput's 0–65535 absolute space onto that
 //! frame — with monitors at negative origins (left / above the primary) handled.
 
-#![allow(dead_code)] // TEMP(phase 1): wired up by the agent loop in phase 2
-
 use super::ui::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,6 +48,7 @@ pub fn screen_to_norm(p: Point, region: Rect) -> (i32, i32) {
 }
 
 /// Pixel in a downscaled screenshot (`img_w` × `img_h` showing `region`) → physical pixel.
+#[cfg(test)]
 pub fn image_to_screen(px: f64, py: f64, img_w: u32, img_h: u32, region: Rect) -> Point {
     norm_to_screen(px / img_w.max(1) as f64 * NORM_MAX, py / img_h.max(1) as f64 * NORM_MAX, region)
 }
@@ -71,6 +70,7 @@ pub fn monitor_at(p: Point, monitors: &[Monitor]) -> Option<&Monitor> {
 
 /// Logical (DIP) point → physical, Tauri's model: each monitor keeps its physical origin and
 /// scales distances inside it. `monitor` = the monitor the point is on.
+#[cfg_attr(not(test), allow(dead_code))] // for logical-unit callers (DPI-unaware windows)
 pub fn logical_to_physical(lx: f64, ly: f64, monitor: &Monitor) -> Point {
     let ox = monitor.rect.x as f64;
     let oy = monitor.rect.y as f64;
@@ -79,6 +79,7 @@ pub fn logical_to_physical(lx: f64, ly: f64, monitor: &Monitor) -> Point {
 }
 
 /// Physical point → logical (inverse of [`logical_to_physical`]).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn physical_to_logical(p: Point, monitor: &Monitor) -> (f64, f64) {
     let s = if monitor.scale > 0.0 { monitor.scale } else { 1.0 };
     let ox = monitor.rect.x as f64;
@@ -111,7 +112,8 @@ pub fn to_absolute(p: Point, virtual_screen: Rect) -> (i32, i32) {
     (ax.clamp(0.0, 65535.0) as i32, ay.clamp(0.0, 65535.0) as i32)
 }
 
-/// SendInput absolute → physical pixel (to check where a move landed).
+/// SendInput absolute → physical pixel (inverse of [`to_absolute`]).
+#[cfg(test)]
 pub fn from_absolute(ax: i32, ay: i32, virtual_screen: Rect) -> Point {
     let w = (virtual_screen.w - 1).max(1) as f64;
     let h = (virtual_screen.h - 1).max(1) as f64;

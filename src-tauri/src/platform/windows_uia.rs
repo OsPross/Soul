@@ -805,7 +805,11 @@ pub(super) fn send_step(step: &InputStep) -> Result<(), String> {
     ensure_dpi_aware_thread();
     match *step {
         InputStep::MoveTo(p) => {
-            let (ax, ay) = coords::to_absolute(p, virtual_screen());
+            let vs = match coords::virtual_bounds(&monitors()) {
+                r if r.is_empty() => virtual_screen(),
+                r => r,
+            };
+            let (ax, ay) = coords::to_absolute(p, vs);
             send(&[mouse(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, ax, ay, 0)])?;
             let mut now = POINT::default();
             // SAFETY: out point.
@@ -903,6 +907,29 @@ pub(super) fn exclude_from_capture(id: u64, on: bool) -> Result<(), String> {
     // SAFETY: user32 validates the handle.
     unsafe { SetWindowDisplayAffinity(hwnd(id), if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE }) }
         .map_err(|e| format!("SetWindowDisplayAffinity: {e}"))
+}
+
+/// Click-through, never-activated, no taskbar button (agent highlight ring).
+pub(super) fn prepare_overlay(id: u64) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    };
+    // SAFETY: user32 validates the handle; only extended style bits are added.
+    unsafe {
+        let h = hwnd(id);
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        let add = WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0 | WS_EX_TRANSPARENT.0 | WS_EX_LAYERED.0;
+        SetWindowLongW(h, GWL_EXSTYLE, (ex | add) as i32);
+    }
+}
+
+pub(super) fn show_overlay(id: u64, show: bool) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOWNOACTIVATE};
+    // SAFETY: user32 validates the handle.
+    unsafe {
+        let _ = ShowWindow(hwnd(id), if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+    }
+    true
 }
 
 /// Opt-in: print the accessibility snapshot of whatever window is focused after 3 s.

@@ -412,6 +412,15 @@ impl Platform for LinuxX11Platform {
     fn monitors(&self) -> Vec<super::coords::Monitor> {
         super::linux_atspi::monitors()
     }
+
+    fn open_settings_page(&self, page: &str) -> Result<String, String> {
+        let (_, panel) = super::apps::settings_page(page).ok_or_else(|| format!("Unknown settings page '{page}'."))?;
+        Command::new("gnome-control-center")
+            .arg(panel)
+            .spawn()
+            .map_err(|e| format!("Opening settings failed (gnome-control-center): {e}"))?;
+        Ok(format!("Opened settings: {panel}"))
+    }
 }
 
 /// Cached X connection + the three EWMH atoms (connecting every poll is wasteful).

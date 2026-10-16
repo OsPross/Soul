@@ -2,8 +2,6 @@
 //! ≤ `max_side` px, draw numbered boxes for the accessibility elements ("set-of-marks", so the
 //! model refers to ids, not raw pixels) and encode as JPEG. In memory only.
 
-#![allow(dead_code)] // TEMP(phase 1): wired up by the agent loop in phase 2
-
 use super::coords::fit_within;
 use super::ui::{Rect, UiElement};
 use image::{ImageEncoder, Rgb, RgbImage, RgbaImage};

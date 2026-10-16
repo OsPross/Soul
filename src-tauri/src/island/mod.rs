@@ -95,6 +95,8 @@ pub struct AssistantBanner {
 pub enum Activity {
     Dictation,
     Command,
+    /// Computer agent task (Island agent card).
+    Agent,
 }
 
 impl Activity {
@@ -102,6 +104,7 @@ impl Activity {
         match self {
             Self::Dictation => "dictation",
             Self::Command => "command",
+            Self::Agent => "agent",
         }
     }
 }

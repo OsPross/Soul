@@ -154,13 +154,28 @@ pub trait Platform: Send + Sync {
     /// Monitors in physical pixels with their scale factors.
     fn monitors(&self) -> Vec<coords::Monitor>;
 
+    /// Open an allowlisted system settings page (`apps::settings_page`: sound, display…).
+    fn open_settings_page(&self, page: &str) -> Result<String, String> {
+        let _ = page;
+        Err("Opening settings pages is not supported here.".into())
+    }
+
+    /// Turn one of Soul's windows into a click-through overlay that never takes focus
+    /// (agent highlight ring). Best effort.
+    fn prepare_overlay_window(&self, _window_id: u64) {}
+
+    /// Show / hide such an overlay without activating it. `false` = not supported here (the
+    /// caller uses the toolkit's show/hide).
+    fn show_overlay_window(&self, _window_id: u64, _show: bool) -> bool {
+        false
+    }
+
     /// Keep one of Soul's windows out of screen captures during a task. Best effort.
     fn exclude_from_capture(&self, _window_id: u64, _on: bool) -> Result<(), String> {
         Ok(())
     }
 }
 
-#[allow(dead_code)] // TEMP(phase 1)
 /// Native id of a Tauri window (HWND on Windows) for `exclude_from_capture` / `activate_window`.
 pub fn native_window_id(win: &tauri::WebviewWindow) -> Option<u64> {
     #[cfg(target_os = "windows")]
