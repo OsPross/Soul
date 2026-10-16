@@ -80,6 +80,9 @@ pub fn answer(app: &AppHandle, accepted: bool) -> Result<(), String> {
 
 /// Show `message` with Confirm/Cancel and wait for the answer (false on timeout).
 pub fn request(app: &AppHandle, message: &str) -> Result<bool, String> {
+    if let Some(answer) = crate::e2e::confirm_answer(message) {
+        return Ok(answer);
+    }
     let (tx, rx) = mpsc::channel();
     *app.state::<AppState>().agent.pending_confirm.lock() = Some(Pending {
         tx,
@@ -112,6 +115,10 @@ pub fn request(app: &AppHandle, message: &str) -> Result<bool, String> {
 /// Show a question card and wait (≤ 30 s) for a spoken answer on the talk key. `None` = no
 /// answer, cancelled (button / Esc) or nothing intelligible.
 pub fn ask(app: &AppHandle, question: &str) -> Option<String> {
+    if crate::e2e::enabled() {
+        crate::e2e::trace("question", serde_json::json!({ "question": question }));
+        return None;
+    }
     let (tx, cancel_rx) = mpsc::channel();
     let (atx, arx) = mpsc::channel();
     *app.state::<AppState>().agent.pending_confirm.lock() = Some(Pending {

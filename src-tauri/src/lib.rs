@@ -4,6 +4,7 @@ mod ask;
 mod audio;
 mod capture;
 mod config;
+mod e2e;
 mod i18n;
 mod dev_samples;
 mod island;
@@ -15,6 +16,8 @@ mod timers;
 mod updater;
 mod voice;
 mod wake;
+#[cfg(test)]
+mod voice_e2e;
 #[cfg(test)]
 mod voice_regression;
 #[cfg(test)]
@@ -949,6 +952,7 @@ pub(crate) fn emit_overlay(
         return Ok(());
     }
     OVERLAY_GEN.fetch_add(1, Ordering::SeqCst);
+    e2e::trace("overlay", serde_json::json!({ "state": state, "message": message }));
     let settings = load_settings(app).unwrap_or_default();
     if settings.island_enabled {
         // The Island renders every state, including the Confirm/Cancel card for destructive tools.
@@ -1268,25 +1272,70 @@ pub(crate) fn on_smart_released(app: &AppHandle) {
         let heard = match heard {
             Ok(h) => h,
             Err(e) => {
+                e2e::trace("heard", serde_json::json!({ "error": e }));
                 report_error(&app_handle, e);
                 schedule_hide(&app_handle, 10000);
                 release_busy(&app_handle);
+                e2e::trace("done", serde_json::json!({ "ms": released.elapsed().as_millis() as u64 }));
                 return;
             }
         };
         route_smart_transcript(&app_handle, &platform, &live, &settings, heard, released);
+        e2e::trace("done", serde_json::json!({ "ms": released.elapsed().as_millis() as u64 }));
     });
+}
+
+/// Dev builds: `<app data>/dev-utterance.json` (`{id, wav, confirm, fresh_context}`) is played
+/// into the recorder like a Smart talk-key hold — same capture, Live, routing and tools as a real
+/// press (voice E2E suite, `voice_e2e.rs`).
+#[cfg(debug_assertions)]
+fn dev_utterance(app: &AppHandle, file: &std::path::Path) {
+    let Ok(raw) = std::fs::read_to_string(file) else {
+        return;
+    };
+    let _ = std::fs::remove_file(file);
+    let req: serde_json::Value = serde_json::from_str(raw.trim_start_matches('\u{feff}')).unwrap_or_default();
+    let fail = |e: String| e2e::trace("done", serde_json::json!({ "id": req["id"], "error": e }));
+    let (pcm, rate) = match audio::decode_wav_mono(std::path::Path::new(req["wav"].as_str().unwrap_or_default())) {
+        Ok(wav) => wav,
+        Err(e) => return fail(e),
+    };
+    e2e::set_accept(req["confirm"] == "accept");
+    if req["fresh_context"] == true {
+        agent::context::clear(app);
+    }
+    let held = std::time::Duration::from_secs_f64(pcm.len() as f64 / rate.max(1) as f64)
+        + std::time::Duration::from_millis(req["tail_ms"].as_u64().unwrap_or(300));
+    audio::set_dev_input(pcm, rate);
+    e2e::trace("start", serde_json::json!({ "id": req["id"], "held_ms": held.as_millis() as u64 }));
+    // talk.rs on_down → arm after the tap window → on_up, minus the keyboard hook.
+    agent::barge_in(app);
+    let gate = match talk::begin_capture(app, CaptureTarget::Dictation, true) {
+        Ok((gate, _)) => gate,
+        Err(e) => return fail(e),
+    };
+    let tap = std::time::Duration::from_millis(200);
+    thread::sleep(tap);
+    gate.arm();
+    let _ = emit_overlay(app, "listening", None);
+    thread::sleep(held.saturating_sub(tap));
+    on_smart_released(app);
 }
 
 /// Dev builds only: `<app data>/dev-transcript.txt` is routed like a Smart talk-key transcript,
 /// so the voice path can be tested end to end without a microphone.
 #[cfg(debug_assertions)]
 fn dev_transcript_watcher(app: AppHandle) {
-    let Ok(file) = app.path().app_data_dir().map(|d| d.join("dev-transcript.txt")) else {
+    let Ok(dir) = app.path().app_data_dir() else {
         return;
     };
+    let file = dir.join("dev-transcript.txt");
+    let utterance = dir.join("dev-utterance.json");
     thread::spawn(move || loop {
         thread::sleep(std::time::Duration::from_millis(300));
+        if utterance.exists() {
+            dev_utterance(&app, &utterance);
+        }
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
@@ -1321,12 +1370,32 @@ fn route_smart_transcript(
 ) {
     let text_field = || platform.text_input_focused();
     let context_active = agent::context_active(settings);
+    let stt_model = if heard.live { settings.dictation_model.as_str() } else { settings.effective_ask_model() };
+    e2e::trace(
+        "heard",
+        serde_json::json!({ "text": heard.text, "stt": if heard.live { "live" } else { "rest" }, "model": stt_model,
+            "ms": released.elapsed().as_millis() as u64 }),
+    );
+    // Polish chosen and the transcript is clearly another language (Live sometimes hears Polish as
+    // Slovak / Spanish): neither paste nor act on that guess — ask again.
+    if settings.language.trim() == "pl" && i18n::clearly_not_polish(&heard.text) {
+        eprintln!("[soul][dictation] smart route=rejected (not Polish)");
+        e2e::trace("route", serde_json::json!({ "route": "rejected" }));
+        let lang = i18n::ui_lang(settings);
+        report_error(app, i18n::tr(lang, "Nie zrozumiałem — powtórz po polsku.", "I didn't catch that — please repeat in Polish.").into());
+        schedule_hide(app, 4000);
+        if let Some(state) = app.try_state::<AppState>() {
+            *state.busy.lock() = false;
+        }
+        return;
+    }
     match agent::classify_smart(&heard.text, &settings.wake_word, &text_field, context_active) {
         agent::Intent::Command { text, reason } => {
             eprintln!(
                 "[soul][dictation] smart route=command reason={reason} ms={}",
                 released.elapsed().as_millis()
             );
+            e2e::trace("route", serde_json::json!({ "route": "command", "reason": reason, "text": text }));
             island::set_activity(island::Activity::Command);
             agent::run_text_command(app, platform, live, &text, released);
         }
@@ -1336,7 +1405,13 @@ fn route_smart_transcript(
                 heard.text.chars().count(),
                 released.elapsed().as_millis()
             );
-            match paste_dictation(platform, settings, heard, released) {
+            e2e::trace("route", serde_json::json!({ "route": "dictation" }));
+            let pasted = paste_dictation(platform, settings, heard, released);
+            e2e::trace(
+                "paste",
+                serde_json::json!({ "ok": pasted.is_ok(), "text": pasted.as_ref().unwrap_or_else(|e| e) }),
+            );
+            match pasted {
                 Ok(text) => {
                     island::emit_caption(app, &text);
                     let _ = emit_overlay(app, "done", None);

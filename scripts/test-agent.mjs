@@ -5,31 +5,10 @@
 // Key: SOUL_TEST_KEY, else the key saved in Soul's settings (never printed).
 // Takes over mouse + keyboard for a few minutes. Esc twice / mouse in a corner stops a task.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { soulKey } from "./soul-key.mjs";
 
 const args = process.argv.slice(2);
-const env = { ...process.env };
-if (!env.SOUL_TEST_KEY) {
-  const dirs = [
-    process.env.APPDATA && join(process.env.APPDATA, "com.oskar.soul"),
-    join(homedir(), ".local", "share", "com.oskar.soul"),
-    join(homedir(), ".config", "com.oskar.soul"),
-  ].filter(Boolean);
-  for (const d of dirs) {
-    const f = join(d, "soul-settings.json");
-    if (!existsSync(f)) continue;
-    try {
-      const key = JSON.parse(readFileSync(f, "utf8")).apiKey;
-      if (key) {
-        env.SOUL_TEST_KEY = key;
-        console.log("[test:agent] using the API key from Soul's settings");
-        break;
-      }
-    } catch {}
-  }
-}
+const env = { ...process.env, SOUL_TEST_KEY: soulKey("test:agent") };
 if (!env.SOUL_TEST_KEY) {
   console.error("[test:agent] set SOUL_TEST_KEY (or save a key in Soul's Settings first)");
   process.exit(1);

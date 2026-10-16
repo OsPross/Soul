@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Soul E2E – Notatnik</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 16px 24px; }
+  textarea { width: 100%; max-width: 760px; height: 140px; font: inherit; }
+</style>
+</head>
+<body>
+<h1>Notatnik</h1>
+<label for="note">Notatka</label><br>
+<textarea id="note" name="note"></textarea>
+<script>
+  // ?text=… pre-fills the note (text-action cases select it and ask Soul to fix / translate it).
+  const t = new URLSearchParams(location.search).get('text');
+  if (t) document.getElementById('note').value = t;
+</script>
+</body>
+</html>

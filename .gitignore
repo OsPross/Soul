@@ -30,3 +30,7 @@ latest.json
 
 graphify-out/
 .claude/
+
+# Voice E2E: generated samples, app log, raw results
+tests/e2e/voice/generated/
+tests/e2e/voice/out/

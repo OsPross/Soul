@@ -22,8 +22,10 @@ PowerShell: `$env:SOUL_TEST_KEY="<key>"; npm run test:voice`.
 - `scenes.json` – fixture scenes loaded into an in-memory DB (your own `soul-memory.db` is never read).
 - Record real samples in a dev build: Settings → Zaawansowane → *Nagraj próbkę testową*
   (saves 16 kHz mono WAV here and adds a case with the chosen route; edit `tool`/`args` afterwards).
-- `synth.json` – phrases for synthetic samples (`voices` default Kore+Puck, `speeds` normal/fast,
-  also `slow`, `casual`); files are `synth_<id>_<voice>_<speed>.wav`, cases get `"synthetic": true`.
+- `synth.json` – phrases for synthetic samples (`voices` default Kore+Puck, `speeds` normal/fast/slow = the
+  take played faster/slower; TTS gets the bare text — a style prompt is read aloud); files are
+  `synth_<id>_<voice>_<speed>.wav`, cases get `"synthetic": true`. Gemini TTS models are rotated on the free
+  10/day quota, then the offline Windows voices are used (`voice_e2e::speak`).
 - Env: `SOUL_VOICE_FILTER=<substring>`, `SOUL_VOICE_DELAY_MS` (default 4000 – free-tier pacing),
   `SOUL_TEST_LANGUAGE`, `SOUL_TEST_WAKE_WORD`, `SOUL_TEST_DICTATION_MODEL`, `SOUL_TEST_COMMANDS_MODEL`,
   `SOUL_SYNTH_FORCE=1` (regenerate synthetic WAVs), `SOUL_VOICE_REPORT=<name>.md`,

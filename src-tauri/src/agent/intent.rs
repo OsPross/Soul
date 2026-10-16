@@ -24,7 +24,7 @@ const MAX_QUESTION_WORDS: usize = 12;
 
 const QUESTION_WORDS: &[&str] = &[
     "jak", "co", "gdzie", "kiedy", "dlaczego", "czemu", "ile", "kto", "jaki", "jaka", "jakie",
-    "jakiego", "ktory", "ktora", "ktore", "skad", "dokad",
+    "jakiego", "jakim", "jakiej", "ktory", "ktora", "ktore", "ktorym", "ktorej", "ktorego", "skad", "dokad",
     "how", "what", "whats", "where", "when", "why", "who", "which",
 ];
 
@@ -147,12 +147,15 @@ pub fn classify_with(
         };
     }
 
-    if raw.ends_with('?')
-        && words.len() - filler < MAX_QUESTION_WORDS
-        && rest
-            .first()
-            .is_some_and(|w| QUESTION_WORDS.contains(&w.as_str()))
-    {
+    // „W którym roku…?”, „O której…?”: a preposition may come first.
+    let asks = match rest {
+        [p, w, ..] if matches!(p.as_str(), "w" | "o" | "na" | "z" | "do" | "od" | "po" | "dla" | "przez" | "in" | "at") => {
+            QUESTION_WORDS.contains(&w.as_str())
+        }
+        [w, ..] => QUESTION_WORDS.contains(&w.as_str()),
+        [] => false,
+    };
+    if raw.ends_with('?') && words.len() - filler < MAX_QUESTION_WORDS && asks {
         if text_field_focused() == Some(true) {
             return Intent::Dictation;
         }

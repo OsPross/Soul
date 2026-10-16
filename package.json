@@ -11,6 +11,8 @@
     "tauri": "tauri",
     "test:voice": "node scripts/test-voice.mjs",
     "test:agent": "node scripts/test-agent.mjs",
+    "test:e2e": "node scripts/test-e2e.mjs",
+    "test:e2e:synth": "node scripts/test-e2e.mjs --synth",
     "test:voice:synth": "cargo test --manifest-path src-tauri/Cargo.toml --lib voice_synth::voice_synth -- --ignored --nocapture --exact",
     "version:sync": "node scripts/version.mjs sync",
     "version:check": "node scripts/version.mjs check",

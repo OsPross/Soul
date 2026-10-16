@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Soul E2E – Zamówienie pizzy</title>
+<style>
+  body { font: 15px/1.35 system-ui, sans-serif; margin: 12px 20px; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; max-width: 900px; }
+  label { display: block; }
+  input[type=text], input[type=tel], input[type=email], select, input[type=time] { width: 100%; padding: 4px; box-sizing: border-box; }
+  textarea { width: 100%; height: 44px; box-sizing: border-box; }
+  fieldset { margin: 0; padding: 4px 8px; }
+  .wide { grid-column: 1 / 3; }
+  #summary { margin-top: 10px; padding: 8px; background: #e7f7e7; display: none; white-space: pre-line; }
+</style>
+</head>
+<body>
+<h1>Zamówienie pizzy</h1>
+<form id="order" onsubmit="return submitOrder(event)">
+  <div><label for="name">Imię i nazwisko</label><input id="name" name="name" type="text" autocomplete="off"></div>
+  <div><label for="phone">Telefon</label><input id="phone" name="phone" type="tel" autocomplete="off"></div>
+  <div><label for="email">E-mail</label><input id="email" name="email" type="email" autocomplete="off"></div>
+  <div><label for="time">Godzina dostawy</label><input id="time" name="time" type="time"></div>
+  <fieldset>
+    <legend>Rozmiar</legend>
+    <label><input type="radio" name="size" value="mala" id="size-s"> Mała</label>
+    <label><input type="radio" name="size" value="srednia" id="size-m"> Średnia</label>
+    <label><input type="radio" name="size" value="duza" id="size-l"> Duża</label>
+  </fieldset>
+  <fieldset>
+    <legend>Dodatki</legend>
+    <label><input type="checkbox" name="extra" value="ser" id="x-ser"> Ser</label>
+    <label><input type="checkbox" name="extra" value="pieczarki" id="x-pieczarki"> Pieczarki</label>
+    <label><input type="checkbox" name="extra" value="oliwki" id="x-oliwki"> Oliwki</label>
+    <label><input type="checkbox" name="extra" value="szynka" id="x-szynka"> Szynka</label>
+  </fieldset>
+  <div><label for="sauce">Sos</label>
+    <select id="sauce" name="sauce">
+      <option value="">— wybierz —</option>
+      <option value="pomidorowy">Pomidorowy</option>
+      <option value="czosnkowy">Czosnkowy</option>
+      <option value="ostry">Ostry</option>
+    </select>
+  </div>
+  <div><label for="notes">Uwagi</label><textarea id="notes" name="notes"></textarea></div>
+  <div><label for="pass">Hasło do konta</label><input id="pass" name="pass" type="password" autocomplete="new-password"></div>
+  <div class="wide"><button type="submit" id="submit">Zamów</button></div>
+</form>
+<div id="summary" role="status"></div>
+<script>
+function submitOrder(e) {
+  e.preventDefault();
+  const f = document.getElementById('order');
+  const v = (id) => document.getElementById(id).value;
+  const size = (f.querySelector('input[name=size]:checked') || {}).value || '—';
+  const extras = [...f.querySelectorAll('input[name=extra]:checked')].map((x) => x.value).join(', ') || '—';
+  const s = document.getElementById('summary');
+  s.textContent = 'Podsumowanie zamówienia\nImię: ' + v('name') + '\nTelefon: ' + v('phone') + '\nE-mail: ' + v('email') +
+    '\nRozmiar: ' + size + '\nDodatki: ' + extras + '\nSos: ' + (v('sauce') || '—') + '\nGodzina: ' + (v('time') || '—') +
+    '\nUwagi: ' + v('notes');
+  s.style.display = 'block';
+  document.title = 'Soul E2E – Zamówienie przyjęte';
+  return false;
+}
+</script>
+</body>
+</html>

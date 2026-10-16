@@ -18,6 +18,19 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- Voice fixes found by the new end-to-end voice test suite:
+  - „A teraz to samo na YouTube” repeats the previous search on YouTube (it searched for „samo”).
+  - „Wyszukaj na YouTube … i włącz drugi wynik” no longer tries to open an app called „drugi wynik”.
+  - Switching to a Vio tab by name no longer ends in „Zapętliłem się”: the tab list stays visible
+    to the agent after a bad model answer, and a repeated read shows its result again.
+  - Questions about the open page („W którym roku według tego artykułu…?”, „Streść mi ten
+    artykuł”), long „Wypełnij formularz: …” commands and „Wybierz sos ostry” are commands, not
+    dictation.
+  - With Polish as the language, a transcript that is clearly another language is neither pasted
+    nor executed — Soul asks to repeat.
+  - Text actions („popraw to”, „przetłumacz to”) use the agent's model rotation, so one overloaded
+    model (503) no longer fails them; a slow model is skipped after 9 s instead of failing the step.
+  - Gemini 5xx errors show the short API message instead of a JSON dump.
 - Soul Agent / model pool: retired models (404) are skipped for good, also before the ledger is written,
   and models missing from the key's list are never picked; no `/models` request per step. A model
   that fails (429 / 503 / 400 / network) rests for 60 s. A model that rejects the MINIMAL thinking

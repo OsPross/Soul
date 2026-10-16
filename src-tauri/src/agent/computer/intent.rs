@@ -115,7 +115,20 @@ pub fn is_computer_task(text: &str) -> bool {
     if super::vio::connected() && is_browser_phrase(text) {
         return true;
     }
-    is_screen_question(&words)
+    picks_listed_item(&words) || is_screen_question(&words)
+}
+
+/// „…i włącz drugi wynik”, „kliknij trzeci link”, „puść pierwszy film”: a pick verb right before an
+/// ordinal + item on the page (not „wyszukaj pierwszy film Nolana” — a search).
+fn picks_listed_item(words: &[String]) -> bool {
+    const PICK: &[&str] = &["wlacz", "kliknij", "otworz", "pusc", "wybierz", "odpal", "zagraj", "play", "open", "click"];
+    words.iter().enumerate().any(|(i, w)| {
+        let next = &words[i + 1..words.len().min(i + 4)];
+        PICK.contains(&w.as_str())
+            && next.len() >= 2
+            && router::names_screen_item(&next[..1])
+            && router::names_screen_item(&next[1..])
+    })
 }
 
 /// Words naming the browser itself (folded): with Vio connected such a task goes to Vio even when
@@ -136,21 +149,28 @@ const PAGE_VERBS: &[&str] = &[
 ];
 const PAGE_NOUNS: &[&str] = &["strone", "stronie", "strony", "formularz", "formularzu", "pola", "pole", "page", "form", "fields"];
 
+/// A page noun, or „ten / tego / tym artykuł” (a bare „artykuł” may be dictated: „streść artykuł do jutra”).
+fn names_page(words: &[String]) -> bool {
+    words.iter().any(|w| PAGE_NOUNS.contains(&w.as_str()))
+        || words.windows(2).any(|p| {
+            matches!(p[0].as_str(), "ten" | "tego" | "tym" | "this") && matches!(p[1].as_str(), "artykul" | "artykulu" | "artykule" | "article")
+        })
+}
+
 /// Browser phrases routed to the agent while Vio is connected: „otwórz w przeglądarce X”,
 /// „przeczytaj / streść tę stronę”, „wypełnij formularz”, „sprawdź które pola są puste”.
 pub fn is_browser_phrase(text: &str) -> bool {
     let words = words_after_fillers(text);
     let Some(first) = words.first() else { return false };
-    let has = |set: &[&str]| words.iter().any(|w| set.contains(&w.as_str()));
     // „otwórz przeglądarkę” alone is the app (router), not a browser task.
-    (names_browser(text) && words.len() >= 3) || (PAGE_VERBS.contains(&first.as_str()) && has(PAGE_NOUNS))
+    (names_browser(text) && words.len() >= 3) || (PAGE_VERBS.contains(&first.as_str()) && names_page(&words))
 }
 
 /// „przeczytaj / streść / podsumuj tę stronę”: answered from the page text, no clicking.
 pub fn is_read_page_task(text: &str) -> bool {
     let words = words_after_fillers(text);
     words.first().is_some_and(|w| matches!(w.as_str(), "przeczytaj" | "stresc" | "streszcz" | "podsumuj" | "read" | "summarize" | "summarise"))
-        && words.iter().any(|w| PAGE_NOUNS.contains(&w.as_str()))
+        && names_page(&words)
 }
 
 /// The user points at what is in front of them („na ekranie”, „na tej stronie”, „w formularzu”).
@@ -162,8 +182,9 @@ pub fn refers_to_screen(text: &str) -> bool {
 
 /// Places on the screen (folded, locative): the command is about the UI in front of the user.
 const SCREEN_PLACES: &[&str] = &[
-    "w formularzu", "na ekranie", "na tej stronie", "w tym oknie", "w tym polu", "w polu", "on the screen",
-    "on my screen", "on this page", "in the form", "in this window",
+    "w formularzu", "na ekranie", "na tej stronie", "w tym oknie", "w tym polu", "w polu", "w tym artykule",
+    "wedlug tego artykulu", "z tego artykulu", "wedlug tej strony", "on the screen", "on my screen", "on this page",
+    "in the form", "in this window", "in this article",
 ];
 
 /// „co jest na ekranie?”, „co widzisz?”, „przeczytaj, co jest na ekranie”, "what's on my screen".
@@ -191,7 +212,9 @@ const NAMED_MESSENGERS: &[&str] = &[
 /// wake word or command mode still reach the agent through `is_computer_task`).
 pub fn is_explicit_ui_command(text: &str) -> bool {
     let words = words_after_fillers(text);
-    if words.is_empty() || words.len() > 16 {
+    // „Wypełnij formularz: imię …, telefon …, e-mail …” lists every field: no length cap.
+    let form_fill = words.len() >= 2 && words[0] == "wypelnij" && words[1].starts_with("formularz");
+    if words.is_empty() || (words.len() > 16 && !form_fill) {
         return false;
     }
     let first = words[0].as_str();
@@ -200,7 +223,9 @@ pub fn is_explicit_ui_command(text: &str) -> bool {
         "doubleclick", "rightclick",
     ];
     let english_click = matches!(first, "double" | "right") && words.get(1).is_some_and(|w| w.starts_with("click"));
-    if STRONG.contains(&first) || english_click {
+    // „Wybierz sos ostry” (a short pick), not „wybierz się do kina…”.
+    let pick = first == "wybierz" && words.len() <= 6 && words.get(1).is_some_and(|w| w != "sie");
+    if STRONG.contains(&first) || english_click || pick {
         return is_computer_task(text);
     }
     if MESSAGE_VERBS.contains(&first) && words.iter().any(|w| NAMED_MESSENGERS.contains(&w.as_str())) {
@@ -506,6 +531,7 @@ mod tests {
         assert!(is_read_page_task("przeczytaj tę stronę"));
         assert!(!is_read_page_task("wypełnij formularz"));
         assert!(!is_read_page_task("streść artykuł"));
+        assert!(is_read_page_task("streść mi ten artykuł") && is_read_page_task("Streszcz mi ten artykuł."));
         assert!(refers_to_screen("co jest na ekranie"));
         assert!(refers_to_screen("przeczytaj co jest na tej stronie"));
         assert!(!refers_to_screen("streść tę stronę"));

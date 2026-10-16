@@ -163,7 +163,7 @@ pub fn classify_smart(
     if text_action::parse(text).is_some() {
         return command("text-action");
     }
-    if computer::intent::is_explicit_ui_command(text) {
+    if computer::intent::is_explicit_ui_command(text) || computer::intent::is_read_page_task(text) {
         return command("computer-task");
     }
     if context::is_reset_phrase(text) {
@@ -394,6 +394,7 @@ fn local_dispatch(
     }
     if context::is_reset_phrase(text) {
         context::clear(app);
+        crate::e2e::trace("tool", json!({ "name": "context_reset", "args": {}, "ok": true }));
         return Some(Local {
             result: Ok("Okej, nowy temat.".into()),
             summary: "conversation context cleared (new topic)".into(),
@@ -522,11 +523,13 @@ fn text_command(
     auto_remember(app, text);
 
     if computer::is_computer_task(text) {
+        crate::e2e::trace("stage", json!({ "via": "computer-intent" }));
         return computer_command(app, text);
     }
     // The previous exchanges (taken before this command adds its own).
     let ctx = context::active_block(&settings);
     if let Some(local) = local_dispatch(app, platform, text) {
+        crate::e2e::trace("stage", json!({ "via": "local" }));
         if !(voice.enabled && live_ok && local.speak) {
             return CommandOutcome::done(local.result);
         }
@@ -552,6 +555,7 @@ fn text_command(
             None => text.to_string(),
         };
         let (rx, id) = live.commands.begin_text_turn(&turn_text);
+        crate::e2e::trace("stage", json!({ "via": "live", "model": settings.commands_model }));
         match run_agent_live(app, platform, live, &rx, released, text, voice) {
             LiveAgentOutcome::Done(result, late) => {
                 return CommandOutcome::live(result, (rx, id), late);
@@ -574,6 +578,7 @@ fn text_command(
     let client = GeminiClient::new(&settings.api_key, settings.effective_ask_model());
     let fallback = resolve_fallback_model(&settings, &crate::ai::gemini::cached_models());
     eprintln!("[soul][agent] router=LLM(REST) transcript={text:?}");
+    crate::e2e::trace("stage", json!({ "via": "rest", "model": settings.effective_ask_model(), "fallback": fallback }));
     CommandOutcome::done(run_agent_rest(app, platform, &client, &fallback, text, released))
 }
 
@@ -697,6 +702,10 @@ fn finish_command(
         }
     };
     context::commit(app, turn, &answer);
+    crate::e2e::trace(
+        "command_done",
+        json!({ "ok": outcome.result.is_ok(), "result": outcome.result.as_ref().unwrap_or_else(|e| e), "spoken": voice.spoken }),
+    );
 
     let hide_ms = match (&outcome.result, voice.started) {
         (Err(_), _) => 10_000,
@@ -726,6 +735,11 @@ fn computer_command(app: &AppHandle, text: &str) -> CommandOutcome {
         out.screenshots,
         out.request_bytes / 1024,
         out.ms
+    );
+    crate::e2e::trace(
+        "agent",
+        json!({ "task": text, "ok": out.result.is_ok(), "summary": out.summary, "steps": out.steps,
+            "model_calls": out.model_calls, "screenshots": out.screenshots, "ms": out.ms, "aborted": out.aborted }),
     );
     let summary = out.summary.clone();
     CommandOutcome {
@@ -1567,12 +1581,21 @@ fn shorten(s: &str, max: usize) -> String {
     }
 }
 
-/// `SOUL_DRY_RUN=1`: tools are logged, never executed (pipeline checks without side effects).
-pub(crate) fn dry_run() -> bool {
-    static DRY_RUN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DRY_RUN.get_or_init(|| {
-        std::env::var("SOUL_DRY_RUN").is_ok_and(|v| !v.is_empty() && v != "0")
-    })
+/// `SOUL_DRY_RUN=1`: tools are logged, never executed (pipeline checks without side effects);
+/// `SOUL_DRY_RUN_TOOLS=close_app,set_volume`: only those tools (voice E2E suite).
+pub(crate) fn dry_run(tool: &str) -> bool {
+    static DRY_RUN: std::sync::OnceLock<(bool, Vec<String>)> = std::sync::OnceLock::new();
+    let (all, some) = DRY_RUN.get_or_init(|| {
+        let all = std::env::var("SOUL_DRY_RUN").is_ok_and(|v| !v.is_empty() && v != "0");
+        let some = std::env::var("SOUL_DRY_RUN_TOOLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        (all, some)
+    });
+    *all || some.iter().any(|t| t == tool)
 }
 
 /// What `local_dispatch` would run for `text`, without running it: the steps (tool, args) and
@@ -1618,8 +1641,9 @@ fn execute_tool(
     name: &str,
     args: &Value,
 ) -> Result<String, String> {
-    if dry_run() {
+    if dry_run(name) {
         eprintln!("[soul][agent] dry_run tool={name} args={args} (not executed)");
+        crate::e2e::trace("tool", json!({ "name": name, "args": args, "ok": true, "dry_run": true }));
         context::note_tool(name, args, true);
         return Ok(format!("dry-run: {name} was not executed"));
     }
@@ -1632,6 +1656,10 @@ fn execute_tool(
     if chip {
         crate::island::emit_tool(app, name, if result.is_ok() { "ok" } else { "error" });
     }
+    crate::e2e::trace(
+        "tool",
+        json!({ "name": name, "args": args, "ok": result.is_ok(), "result": result.as_ref().unwrap_or_else(|e| e) }),
+    );
     context::note_tool(name, args, result.is_ok());
     result
 }
@@ -2055,6 +2083,32 @@ mod tests {
         }
         assert!(matches!(smart("Nowy temat.", false), Intent::Command { reason: "context-reset", .. }));
         assert_eq!(smart("Popraw mi humor tym filmem", false), Intent::Dictation);
+    }
+
+    /// Found by the voice E2E suite (`voice_e2e.rs`): page / form commands that were dictated.
+    #[test]
+    fn page_and_form_commands_are_commands() {
+        let long_fill = "Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon 600 700 800, e-mail \
+jan.kowalski@example.com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina 18:30.";
+        for t in [
+            long_fill,
+            "Wybierz sos ostry.",
+            "Streszcz mi ten artykuł.",
+            "Streść mi ten artykuł",
+            "W którym roku według tego artykułu zbudowano pierwszą latarnię?",
+        ] {
+            assert!(is_cmd(&smart(t, false)), "{t}");
+        }
+        for t in ["Wybierz się ze mną w sobotę do kina, będzie fajnie.", "W sobotę idziemy do kina."] {
+            assert_eq!(smart(t, false), Intent::Dictation, "{t}");
+        }
+        assert!(computer::is_computer_task("Wyszukaj na YouTube przepis na naleśniki i włącz drugi wynik"));
+        assert!(computer::is_computer_task("puść pierwszy film"));
+        assert!(!computer::is_computer_task("wyszukaj pierwszy film Nolana"));
+        assert!(!computer::is_computer_task("puść drugi raz tę piosenkę"));
+        assert!(router::match_app_verb("włącz drugi wynik").is_none());
+        assert!(router::match_app_verb("otwórz trzeci link").is_none());
+        assert_eq!(router::match_app_verb("włącz Spotify").unwrap().tool, "open_app");
     }
 
     #[test]

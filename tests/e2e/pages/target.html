@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Soul E2E – Przepis</title>
+</head>
+<body>
+<h1 id="h">Przepis</h1>
+<script>
+  const n = new URLSearchParams(location.search).get('n') || '?';
+  document.title = 'Soul E2E – Przepis nr ' + n;
+  document.getElementById('h').textContent = 'Przepis numer ' + n;
+</script>
+</body>
+</html>

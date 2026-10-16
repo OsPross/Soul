@@ -635,7 +635,7 @@ impl GeminiClient {
     }
 
     fn post_generate_timed(&self, body: Value, label: &str) -> Result<String, AttemptError> {
-        let value = self.post_generate_json(body, label)?;
+        let value = self.post_generate_json(body, label, None)?;
         extract_text_from_value(&value).map_err(|message| AttemptError {
             retryable: false,
             status: None,
@@ -643,7 +643,7 @@ impl GeminiClient {
         })
     }
 
-    fn post_generate_json(&self, mut body: Value, label: &str) -> Result<Value, AttemptError> {
+    fn post_generate_json(&self, mut body: Value, label: &str, timeout: Option<Duration>) -> Result<Value, AttemptError> {
         if self.api_key.trim().is_empty() {
             return Err(AttemptError {
                 retryable: false,
@@ -659,13 +659,15 @@ impl GeminiClient {
         let t0 = Instant::now();
         eprintln!("[soul][{label}] stage=request_sent model={model} url={url}");
 
-        let response = match http_client()
+        let mut request = http_client()
             .post(&url)
             .header("x-goog-api-key", &self.api_key)
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-        {
+            .json(&body);
+        if let Some(t) = timeout {
+            request = request.timeout(t);
+        }
+        let response = match request.send() {
             Ok(r) => r,
             Err(e) => {
                 let msg =
@@ -738,10 +740,11 @@ impl GeminiClient {
     }
 
     /// One agent request on this client's model, no fallback: the model pool (`ai::pool`) rotates
-    /// itself. Err = (HTTP status, message).
-    pub fn agent_generate_once(&self, body: Value) -> Result<Value, (Option<u16>, String)> {
+    /// itself. `timeout` bounds the request, so a slow model fails (and is cooled) instead of
+    /// eating the whole step. Err = (HTTP status, message).
+    pub fn agent_generate_once(&self, body: Value, timeout: Duration) -> Result<Value, (Option<u16>, String)> {
         loop {
-            match self.post_generate_json(body.clone(), "agent") {
+            match self.post_generate_json(body.clone(), "agent", Some(timeout)) {
                 Ok(v) => return Ok(v),
                 // The thinking setting is adapted per model on every attempt (`adapt_thinking_config`).
                 Err(e) if thinking_step_down(&self.model, e.status, &e.message) => continue,
@@ -775,7 +778,7 @@ impl GeminiClient {
         };
 
         let try_once = |model: &str| -> Result<Value, AttemptError> {
-            self.with_model(model).post_generate_json(body.clone(), "agent")
+            self.with_model(model).post_generate_json(body.clone(), "agent", None)
         };
 
         match try_once(&primary) {
@@ -844,23 +847,6 @@ impl GeminiClient {
             return Err("Empty search answer".into());
         }
         Ok(text)
-    }
-
-    /// Selected-text action („popraw to”, „przetłumacz to na angielski”): text in → text out.
-    /// Same immediate-fallback policy as the agent; the selection is only in this request.
-    pub fn text_action(
-        &self,
-        instruction: &str,
-        text: &str,
-        fallback_model: Option<&str>,
-    ) -> Result<String, String> {
-        let body = text_action_body(instruction, text);
-        let value = self.agent_generate_resilient(body, fallback_model, |_, _| {}, |_| {})?;
-        let out = clean_text_action_output(&extract_text_from_value(&value)?);
-        if out.trim().is_empty() {
-            return Err("Gemini returned an empty result.".into());
-        }
-        Ok(out)
     }
 }
 
@@ -1820,16 +1806,34 @@ fn friendly_api_error(status: u16, body: &str) -> String {
         404 => format!(
             "Model not found (404). The model id may be retired for your key — pick another from Settings. Details: {safe}"
         ),
+        // 429 keeps the whole body: daily-quota detection reads the quota ids in it.
         429 => format!("Gemini rate limit hit (429). {safe}"),
-        503 => format!("Gemini unavailable (503). {safe}"),
-        500..=599 => format!("Gemini server error ({status}). {safe}"),
+        // 5xx: the API's own one-line message, not a JSON dump on the Island.
+        503 => format!("Gemini unavailable (503): {}", api_error_message(&safe)),
+        500..=599 => format!("Gemini server error ({status}): {}", api_error_message(&safe)),
         _ => format!("Gemini API error ({status}): {safe}"),
     }
+}
+
+/// `{"error": {"message": …}}` → the message; anything else as is.
+fn api_error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| body.trim().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_errors_show_the_api_message_not_json() {
+        let body = r#"{"error":{"code":503,"message":"This model is currently experiencing high demand.","status":"UNAVAILABLE"}}"#;
+        assert_eq!(friendly_api_error(503, body), "Gemini unavailable (503): This model is currently experiencing high demand.");
+        assert_eq!(friendly_api_error(500, "oops"), "Gemini server error (500): oops");
+        assert!(friendly_api_error(429, body).contains("UNAVAILABLE"), "429 keeps the body for quota detection");
+    }
 
     #[test]
     fn thinking_level_steps_down_per_model() {

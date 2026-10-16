@@ -36,7 +36,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const TASK_TIMEOUT: Duration = Duration::from_secs(90);
-pub const STEP_TIMEOUT: Duration = Duration::from_secs(10);
+/// One model request; a slower model is cooled and the pool tries the next one.
+pub const MODEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(9);
+/// One step's model call, room for a rotation after a slow model.
+pub const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 /// Consecutive failed steps before the task gives up.
 const MAX_FAILS_IN_ROW: u32 = 3;
 /// Context tool name for the conversation context („a teraz kliknij drugi”).
@@ -138,6 +141,8 @@ struct Run<'a> {
     last_sig: Option<String>,
     want_look: bool,
     note: Option<String>,
+    /// The latest READ (tab list, page text): shown again when the model repeats that read.
+    last_read: Option<String>,
     monitors: Vec<Monitor>,
     debug: Option<std::path::PathBuf>,
     vio: Option<Arc<vio::Client>>,
@@ -172,6 +177,7 @@ pub fn run_task(host: &dyn Host, task: &str) -> Outcome {
         last_sig: None,
         want_look: false,
         note: None,
+        last_read: None,
         monitors: Vec::new(),
         debug: if cfg.debug_screenshots { host.debug_dir() } else { None },
         cfg,
@@ -354,7 +360,7 @@ impl Run<'_> {
     fn call_model(&mut self, body: Value) -> Result<Value, String> {
         self.bytes += body.to_string().len();
         self.calls += 1;
-        // Waiting for a free RPM slot is not part of the call's 10 s (the 90 s task limit still is).
+        // Waiting for a free RPM slot is not part of the call's STEP_TIMEOUT (the 90 s task limit still is).
         let wait_t0 = Instant::now();
         let mut said = false;
         while let Some(w) = self.host.model_wait() {
@@ -384,7 +390,8 @@ impl Run<'_> {
                 Ok(r) => return r,
                 Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => continue,
                 Err(RecvTimeoutError::Timeout) => {
-                    return Err(tr(self.lang, "Model nie odpowiedział w 10 s.", "The model did not answer within 10 s.").into())
+                    let s = STEP_TIMEOUT.as_secs();
+                    return Err(tr(self.lang, format!("Model nie odpowiedział w {s} s."), format!("The model did not answer within {s} s.")));
                 }
                 Err(RecvTimeoutError::Disconnected) => return Err("Model call failed.".into()),
             }
@@ -510,6 +517,8 @@ impl Run<'_> {
                             d
                         }
                         Err(e) => {
+                            // The model never acted on this READ: keep it for the next try.
+                            self.note = self.note.take().or(note);
                             self.fails_in_row += 1;
                             self.last_failed = true;
                             self.history.push(format!("(invalid step: {})", clip(&e, 160)));
@@ -533,7 +542,15 @@ impl Run<'_> {
                 self.fails_in_row += 1;
                 self.last_failed = true;
                 self.history.push(format!("{} → NOT RUN: identical to the previous call. {hint}", decision.name));
-                self.note = Some(hint);
+                // A repeated read gets its earlier result again („already above” must be true).
+                let read_again = matches!(
+                    decision.action,
+                    Action::Browser(action::BrowserOp::ListTabs | action::BrowserOp::ReadPage | action::BrowserOp::GetElements)
+                );
+                self.note = match (&self.last_read, read_again) {
+                    (Some(read), true) => Some(read.clone()),
+                    _ => Some(hint),
+                };
                 if self.fails_in_row >= MAX_FAILS_IN_ROW {
                     let msg = tr(self.lang, "Zapętliłem się — przerywam.", "I'm going in circles — stopping.");
                     return self.finish(Err(msg.into()), Phase::Failed);
@@ -646,6 +663,7 @@ impl Run<'_> {
                     }
                     if let Some(text) = &done.read {
                         self.note = Some(text.clone());
+                        self.last_read = Some(text.clone());
                     }
                     let status = if done.verified { "ok" } else { "FAILED" };
                     self.history.push(format!("{line} → {status}{}", done.detail));

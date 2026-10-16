@@ -98,28 +98,8 @@ fn test_settings() -> Settings {
 
 /// Any WAV → 16 kHz s16le mono PCM.
 pub(crate) fn load_pcm16k(path: &Path) -> Result<Vec<u8>, String> {
-    let mut reader = hound::WavReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let spec = reader.spec();
-    let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .collect::<Result<_, _>>()
-            .map_err(|e| e.to_string())?,
-        hound::SampleFormat::Int => {
-            let max = (1i64 << (spec.bits_per_sample.max(1) - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 / max))
-                .collect::<Result<_, _>>()
-                .map_err(|e| e.to_string())?
-        }
-    };
-    let channels = spec.channels.max(1) as usize;
-    let mono: Vec<f32> = samples
-        .chunks(channels)
-        .map(|frame| frame.iter().sum::<f32>() / frame.len() as f32)
-        .collect();
-    Ok(resample_to_pcm16k(&mono, spec.sample_rate))
+    let (mono, rate) = crate::audio::decode_wav_mono(path)?;
+    Ok(resample_to_pcm16k(&mono, rate))
 }
 
 /// Linear resample to 16 kHz, then s16le.
@@ -406,7 +386,7 @@ impl Pipeline {
 
 // ───────────────────────────── expectations ─────────────────────────────
 
-fn fold_text(s: &str) -> String {
+pub(crate) fn fold_text(s: &str) -> String {
     s.split_whitespace()
         .map(agent::fold_word)
         .filter(|w| !w.is_empty())
@@ -428,7 +408,7 @@ fn exact_text(s: &str) -> String {
         .join(" ")
 }
 
-fn value_matches(expected: &Value, actual: Option<&Value>) -> bool {
+pub(crate) fn value_matches(expected: &Value, actual: Option<&Value>) -> bool {
     let Some(actual) = actual else {
         return false;
     };

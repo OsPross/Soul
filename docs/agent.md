@@ -11,7 +11,7 @@ change, and repeats until the task is done, the user stops it, or a limit is hit
 ## Goals and non-goals
 
 - Reliable and safe before clever: one action per model call, every action verified, hard limits
-  (20 steps, 90 s, 10 s per step), local safety checks the model cannot talk its way around.
+  (20 steps, 90 s, 20 s per step, 9 s per model request), local safety checks the model cannot talk its way around.
 - Cheap on the free tier: accessibility text every step, a screenshot only when needed, a
   deterministic local plan for trivial tasks (0 calls), and a `final` flag so one-shot tasks
   finish without a separate `done` call.
@@ -155,7 +155,7 @@ for step in 1..=max_steps (≤ 20), total ≤ 90 s:
     abort?  → stop
     snapshot (≤ 4 s)                      blocklist re-checked every step
     local plan?  (step 1 only: „kliknij X” with exactly one exact match, „przewiń w dół”)
-    else model call (≤ 10 s, abortable):  system + task + [CONTEXT] + history (last 8 steps)
+    else model call (≤ 20 s, 9 s per model request, abortable):  system + task + [CONTEXT] + history (last 8 steps)
                                           + observation text (+ JPEG when needed)
     parse ONE function call → UiAction → validate (id exists, not password, not a secret)
     safety verdict: Allow | Confirm(reason) | Refuse(reason)

@@ -1,0 +1,1058 @@
+{
+  "voices": [
+    "Kore",
+    "Puck",
+    "Charon"
+  ],
+  "speeds": [
+    "normal",
+    "fast",
+    "slow"
+  ],
+  "dry_run_tools": [
+    "close_app",
+    "set_volume",
+    "media_control",
+    "open_app",
+    "focus_app",
+    "type_text"
+  ],
+  "cases": [
+    {
+      "id": "media_next",
+      "cap": "media_control · pre-router",
+      "text": "Następna piosenka",
+      "variants": [
+        "noise",
+        "quiet",
+        "pad"
+      ],
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "media_control",
+            "args": {
+              "action": "next"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "media_pause",
+      "cap": "media_control · very short",
+      "text": "Pauza",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "media_control",
+            "args": {
+              "action": "pause"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "volume_down_20",
+      "cap": "set_volume delta",
+      "text": "Ścisz o dwadzieścia",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "set_volume",
+            "args": {
+              "delta": -20
+            }
+          }
+        ]
+      },
+      "transcript": "Ścisz o 20"
+    },
+    {
+      "id": "followup_again",
+      "cap": "context follow-up („tak samo jak wcześniej”)",
+      "text": "Jeszcze raz, tak samo jak wcześniej",
+      "setup": {
+        "fresh_context": false
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "set_volume",
+            "args": {
+              "delta": -20
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "volume_30",
+      "cap": "set_volume percent",
+      "text": "Ustaw głośność na trzydzieści procent",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "set_volume",
+            "args": {
+              "percent": 30
+            }
+          }
+        ]
+      },
+      "transcript": "Ustaw głośność na 30%"
+    },
+    {
+      "id": "open_spotify",
+      "cap": "open_app",
+      "text": "Otwórz Spotify",
+      "variants": [
+        "noise",
+        "quiet",
+        "pad",
+        "alt"
+      ],
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "open_app",
+            "args": {
+              "name": "spotify"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "followup_close_it",
+      "cap": "context follow-up („zamknij go”)",
+      "text": "A teraz zamknij go",
+      "setup": {
+        "fresh_context": false
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "close_app",
+            "args": {
+              "name": "spotify"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "filler_open_discord",
+      "cap": "filler opener + open_app",
+      "text": "Dobra, weź mi otwórz Discorda",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "open_app",
+            "args": {
+              "name": "discord"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "wake_polite_spotify",
+      "cap": "wake word + polite form",
+      "text": "Hej Soul, czy możesz otworzyć Spotify?",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "open_app",
+            "args": {
+              "name": "spotify"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "close_discord",
+      "cap": "close_app (risky → dry-run)",
+      "text": "Zamknij Discorda",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "close_app",
+            "args": {
+              "name": "discord"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "focus_discord",
+      "cap": "focus_app",
+      "text": "Przełącz na Discorda",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "focus_app",
+            "args": {
+              "name": "discord"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "chain_close_open",
+      "cap": "chain (2 deterministic parts)",
+      "text": "Zamknij Spotify i otwórz Discorda",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "close_app",
+            "args": {
+              "name": "spotify"
+            }
+          },
+          {
+            "name": "open_app",
+            "args": {
+              "name": "discord"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "command_correction",
+      "cap": "mid-sentence correction (command)",
+      "text": "Otwórz Spotify, nie, czekaj, otwórz jednak Discorda",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "open_app",
+            "args": {
+              "name": "discord"
+            }
+          }
+        ],
+        "forbid_tools": [
+          {
+            "name": "open_app",
+            "args": {
+              "name": "spotify"
+            }
+          }
+        ],
+        "min_similarity": 0.3
+      }
+    },
+    {
+      "id": "dictation_long",
+      "cap": "dictation → paste into a Vio textarea",
+      "text": "Drogi Panie Marku, dziękuję za szybką odpowiedź. Przesyłam poprawioną wersję umowy i proszę o potwierdzenie terminu spotkania.",
+      "variants": [
+        "noise",
+        "pad"
+      ],
+      "setup": {
+        "tabs": [
+          "notes"
+        ],
+        "focus": "Notatka"
+      },
+      "expect": {
+        "route": "dictation",
+        "pasted_contains": [
+          "umowy",
+          "spotkania"
+        ],
+        "vio": {
+          "fields": {
+            "Notatka": {
+              "contains": "poprawioną wersję umowy"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "dictation_correction",
+      "cap": "dictation with a self-correction (LLM cleanup)",
+      "text": "Spotkanie jest we wtorek, a nie, przepraszam, w środę o dziesiątej.",
+      "setup": {
+        "tabs": [
+          "notes"
+        ],
+        "focus": "Notatka"
+      },
+      "expect": {
+        "route": "dictation",
+        "pasted_contains": [
+          "środ"
+        ],
+        "pasted_lacks": [
+          "wtorek"
+        ],
+        "vio": {
+          "fields": {
+            "Notatka": {
+              "contains": "środ"
+            }
+          }
+        },
+        "min_similarity": 0.3
+      }
+    },
+    {
+      "id": "dictation_diacritics",
+      "cap": "dictation, Polish diacritics",
+      "text": "Zażółć gęślą jaźń, a potem źdźbło trawy.",
+      "setup": {
+        "tabs": [
+          "notes"
+        ],
+        "focus": "Notatka"
+      },
+      "expect": {
+        "route": "dictation",
+        "pasted_contains": [
+          "gęślą",
+          "źdźbło"
+        ],
+        "vio": {
+          "fields": {
+            "Notatka": {
+              "contains": "jaźń"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "greeting",
+      "cap": "Live spoken answer (no tool)",
+      "text": "Cześć Soul, jak się masz?",
+      "expect": {
+        "route": "command",
+        "answer_nonempty": true,
+        "no_action_tools": true
+      }
+    },
+    {
+      "id": "question_search",
+      "cap": "question → spoken answer (Live or web_search/search_answer)",
+      "text": "Jak długo gotować jajko na twardo?",
+      "expect": {
+        "route": "command",
+        "answer_contains": [
+          "minut"
+        ]
+      }
+    },
+    {
+      "id": "briefing",
+      "cap": "morning_briefing",
+      "text": "Dzień dobry",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "morning_briefing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "now_playing",
+      "cap": "now_playing",
+      "text": "Co teraz gra?",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "now_playing"
+          }
+        ]
+      }
+    },
+    {
+      "id": "voice_quieter",
+      "cap": "set_voice_volume",
+      "text": "Mów trochę ciszej",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "set_voice_volume"
+          }
+        ]
+      }
+    },
+    {
+      "id": "memory_remember",
+      "cap": "remember (DB restored after the run)",
+      "text": "Zapamiętaj, że mój ulubiony kolor to zielony",
+      "variants": [
+        "quiet"
+      ],
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "remember",
+            "args": {
+              "fact": "zielon"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "memory_recall",
+      "cap": "recall",
+      "text": "Co pamiętasz o moim ulubionym kolorze?",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "recall"
+          }
+        ],
+        "answer_contains": [
+          "zielon"
+        ]
+      }
+    },
+    {
+      "id": "memory_forget",
+      "cap": "forget",
+      "text": "Zapomnij o moim ulubionym kolorze",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "forget",
+            "args": {
+              "query": "kolor"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "note_add",
+      "cap": "add_note",
+      "text": "Zanotuj kupić mleko i chleb",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "add_note",
+            "args": {
+              "text": "mleko"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "timer_set",
+      "cap": "set_timer",
+      "text": "Nastaw minutnik na dziesięć minut",
+      "variants": [
+        "noise"
+      ],
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "set_timer",
+            "args": {
+              "seconds": 600
+            }
+          }
+        ]
+      },
+      "transcript": "Nastaw minutnik na 10 minut"
+    },
+    {
+      "id": "timer_cancel",
+      "cap": "cancel_timer",
+      "text": "Anuluj minutnik",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "cancel_timer"
+          }
+        ]
+      }
+    },
+    {
+      "id": "scene_create",
+      "cap": "create_scene (model)",
+      "text": "Utwórz scenę wieczór, która otwiera wikipedia.org i szuka pogody w Krakowie",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "create_scene",
+            "args": {
+              "name": "wiecz"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "scene_run",
+      "cap": "run_scene (Vio steps)",
+      "text": "Uruchom scenę wieczór",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "run_scene"
+          }
+        ],
+        "vio": {
+          "tab_url": "wikipedia.org"
+        }
+      }
+    },
+    {
+      "id": "web_search_bigos",
+      "cap": "web_search → Vio tab",
+      "text": "Wyszukaj w internecie przepis na bigos",
+      "variants": [
+        "noise",
+        "quiet",
+        "alt"
+      ],
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "web_search",
+            "args": {
+              "query": "bigos"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": "google."
+        }
+      }
+    },
+    {
+      "id": "followup_same_youtube",
+      "cap": "context follow-up („to samo na YouTube”)",
+      "text": "A teraz to samo na YouTube",
+      "setup": {
+        "fresh_context": false
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "youtube_search",
+            "args": {
+              "query": "bigos"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": "youtube.com/results"
+        }
+      }
+    },
+    {
+      "id": "context_reset",
+      "cap": "context_reset",
+      "text": "Nowy temat",
+      "setup": {
+        "fresh_context": false
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "context_reset"
+          }
+        ]
+      }
+    },
+    {
+      "id": "open_url_wiki",
+      "cap": "open_url → Vio",
+      "text": "Otwórz stronę wikipedia.org",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "open_url",
+            "args": {
+              "url": "wikipedia"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": "wikipedia.org"
+        }
+      }
+    },
+    {
+      "id": "youtube_search_lofi",
+      "cap": "youtube_search → Vio",
+      "text": "Wyszukaj na YouTube lofi hip hop",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "youtube_search",
+            "args": {
+              "query": "hip hop"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": "youtube.com/results"
+        }
+      }
+    },
+    {
+      "id": "youtube_play_queen",
+      "cap": "youtube_play → Vio",
+      "text": "Puść na YouTube Bohemian Rhapsody",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "youtube_play",
+            "args": {
+              "query": "rhapsody"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": [
+            "youtube.com/watch",
+            "youtube.com/shorts"
+          ]
+        }
+      }
+    },
+    {
+      "id": "youtube_second_result",
+      "cap": "YouTube search + play N-th result (agent)",
+      "text": "Wyszukaj na YouTube przepis na naleśniki i włącz drugi wynik",
+      "expect": {
+        "route": "command",
+        "vio": {
+          "active_url": [
+            "youtube.com/watch",
+            "youtube.com/shorts"
+          ]
+        }
+      }
+    },
+    {
+      "id": "chain_search_note",
+      "cap": "chain (search + note)",
+      "text": "Wyszukaj pogodę w Gdańsku, a potem zanotuj zabrać parasol",
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "web_search",
+            "args": {
+              "query": "gdańsk"
+            }
+          },
+          {
+            "name": "add_note",
+            "args": {
+              "text": "parasol"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "switch_tab_article",
+      "cap": "browser_list_tabs + browser_open tab_id (switch by name)",
+      "text": "Przełącz na kartę z artykułem o Mirosławicach",
+      "setup": {
+        "tabs": [
+          "article",
+          "order",
+          "links"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "active_title": "Mirosławicach"
+        }
+      }
+    },
+    {
+      "id": "links_open_third",
+      "cap": "browser_click on a numbered link",
+      "text": "Kliknij trzeci link na liście",
+      "variants": [
+        "noise",
+        "pad",
+        "alt"
+      ],
+      "setup": {
+        "tabs": [
+          "links"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "active_url": "target.html?n=3"
+        }
+      }
+    },
+    {
+      "id": "summarize_article",
+      "cap": "browser_read_page → summary",
+      "text": "Streść mi ten artykuł",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "answer_contains": [
+          "latarni"
+        ]
+      }
+    },
+    {
+      "id": "read_question",
+      "cap": "browser_read_page → answer",
+      "text": "W którym roku według tego artykułu zbudowano pierwszą latarnię?",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "answer_contains": [
+          "1912"
+        ]
+      }
+    },
+    {
+      "id": "scroll_down",
+      "cap": "browser_scroll",
+      "text": "Przewiń stronę w dół",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true
+      }
+    },
+    {
+      "id": "form_fill_long",
+      "cap": "long dictated form fill (text, tel, e-mail, radio, checkboxes, select, time, textarea)",
+      "text": "Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon sześćset siedemset osiemset, e-mail jan kropka kowalski małpa example kropka com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina dostawy osiemnasta trzydzieści, a w uwagach napisz: proszę dzwonić domofonem.",
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "timeout_s": 180,
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "fields": {
+            "Imię i nazwisko": "Jan Kowalski",
+            "Telefon": {
+              "digits": "600700800"
+            },
+            "E-mail": "jan.kowalski@example.com",
+            "Sos": "Czosnkowy",
+            "Godzina dostawy": "18:30",
+            "Uwagi": {
+              "contains": "domofon"
+            }
+          },
+          "checked": {
+            "Duża": true,
+            "Ser": true,
+            "Oliwki": true,
+            "Pieczarki": false,
+            "Szynka": false
+          }
+        },
+        "min_similarity": 0.6
+      },
+      "transcript": "Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon 600 700 800, e-mail jan.kowalski@example.com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina dostawy 18:30, a w uwagach napisz: proszę dzwonić domofonem."
+    },
+    {
+      "id": "form_radio",
+      "cap": "radio via browser_fill/click",
+      "text": "Zaznacz rozmiar średni",
+      "variants": [
+        "quiet",
+        "alt"
+      ],
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "checked": {
+            "Średnia": true,
+            "Mała": false,
+            "Duża": false
+          }
+        }
+      }
+    },
+    {
+      "id": "form_checkboxes",
+      "cap": "checkboxes",
+      "text": "Zaznacz pieczarki i szynkę",
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "checked": {
+            "Pieczarki": true,
+            "Szynka": true,
+            "Ser": false
+          }
+        }
+      }
+    },
+    {
+      "id": "form_select_sauce",
+      "cap": "<select> via browser_key",
+      "text": "Wybierz sos ostry",
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "fields": {
+            "Sos": "Ostry"
+          }
+        }
+      }
+    },
+    {
+      "id": "form_correction",
+      "cap": "mid-sentence correction (form)",
+      "text": "Wpisz w polu imię Anna Nowak, nie, przepraszam, Anna Nowicka",
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "fields": {
+            "Imię i nazwisko": "Anna Nowicka"
+          }
+        },
+        "min_similarity": 0.3
+      }
+    },
+    {
+      "id": "form_submit_denied",
+      "cap": "safety Confirm (submit) → denied",
+      "text": "Wpisz imię Piotr Zieliński i wyślij formularz",
+      "setup": {
+        "tabs": [
+          "order"
+        ],
+        "confirm": "deny"
+      },
+      "expect": {
+        "route": "command",
+        "confirm": true,
+        "vio": {
+          "page_lacks": [
+            "Podsumowanie zamówienia"
+          ]
+        }
+      }
+    },
+    {
+      "id": "form_submit_accepted",
+      "cap": "safety Confirm (submit) → accepted",
+      "text": "Wpisz imię Ola Wiśniewska i kliknij Zamów",
+      "setup": {
+        "tabs": [
+          "order"
+        ],
+        "confirm": "accept"
+      },
+      "expect": {
+        "route": "command",
+        "confirm": true,
+        "vio": {
+          "page_contains": [
+            "Podsumowanie zamówienia",
+            "Ola Wiśniewska"
+          ]
+        }
+      }
+    },
+    {
+      "id": "password_refused",
+      "cap": "safety Refuse (password field)",
+      "text": "Wpisz w polu hasło do konta sekret123",
+      "setup": {
+        "tabs": [
+          "order"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "vio": {
+          "fields": {
+            "Hasło do konta": ""
+          }
+        }
+      },
+      "transcript": "Wpisz w polu hasło do konta sekret123"
+    },
+    {
+      "id": "foreground_calc_fill",
+      "cap": "Vio task while another app is in front",
+      "text": "W przeglądarce wpisz w polu e-mail test małpa example kropka pl",
+      "setup": {
+        "tabs": [
+          "order"
+        ],
+        "foreground": "calc"
+      },
+      "expect": {
+        "route": "command",
+        "agent": true,
+        "vio": {
+          "fields": {
+            "E-mail": "test@example.pl"
+          }
+        },
+        "min_similarity": 0.6
+      },
+      "transcript": "W przeglądarce wpisz w polu e-mail test@example.pl"
+    },
+    {
+      "id": "text_fix",
+      "cap": "text_action fix (selection in Vio)",
+      "text": "Popraw to",
+      "setup": {
+        "tabs": [
+          "notes?text=Wczoraj%20poszłem%20do%20sklepu%20i%20kupiłem%20mleko."
+        ],
+        "focus": "Notatka",
+        "select_all": true
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "text_action",
+            "args": {
+              "action": "fix"
+            }
+          }
+        ],
+        "vio": {
+          "fields": {
+            "Notatka": {
+              "contains": "poszedłem"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "text_translate",
+      "cap": "text_action translate",
+      "text": "Przetłumacz to na angielski",
+      "setup": {
+        "tabs": [
+          "notes?text=Dziękuję%20za%20pomoc,%20do%20zobaczenia%20jutro."
+        ],
+        "focus": "Notatka",
+        "select_all": true
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "text_action",
+            "args": {
+              "action": "translate"
+            }
+          }
+        ],
+        "vio": {
+          "fields": {
+            "Notatka": {
+              "contains": "thank"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "foreign_rejected",
+      "cap": "non-Polish utterance must be rejected",
+      "text": "Por favor, abre YouTube y pon música relajante.",
+      "lang": "es",
+      "expect": {
+        "route": "rejected"
+      }
+    }
+  ]
+}

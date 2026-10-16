@@ -8,8 +8,8 @@
 //! matching `cases.json` entries with `"synthetic": true`. Existing WAVs are kept unless
 //! `SOUL_SYNTH_FORCE=1`, so a run interrupted by a 429 can simply be repeated.
 
-use crate::ai::live_smoke::tts_pcm16k_styled;
 use crate::dev_samples::{read_cases, voice_test_dir, write_cases};
+use crate::voice_e2e::speak;
 use crate::voice_regression::pcm16k_to_wav;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -17,15 +17,6 @@ use std::time::Duration;
 const SYNTH_FILE: &str = "synth.json";
 const DEFAULT_VOICES: &[&str] = &["Kore", "Puck"];
 const DEFAULT_SPEEDS: &[&str] = &["normal", "fast"];
-
-fn style(speed: &str) -> &'static str {
-    match speed {
-        "fast" => "Powiedz szybko, jak ktoś, kto się spieszy, po polsku",
-        "slow" => "Powiedz powoli i wyraźnie po polsku",
-        "casual" => "Powiedz swobodnie i niedbale, jak do znajomego, po polsku",
-        _ => "Powiedz naturalnie po polsku",
-    }
-}
 
 fn strings(v: &Value, default: &[&str]) -> Vec<String> {
     match v.as_array() {
@@ -49,6 +40,7 @@ fn voice_synth() {
     );
     let mut cases = read_cases(&dir).expect("read cases.json");
     let mut generated = 0;
+    let mut exhausted = Vec::new();
 
     for p in &phrases {
         let id = p["id"].as_str().expect("synth entry needs an id");
@@ -65,10 +57,10 @@ fn voice_synth() {
                     if generated > 0 {
                         std::thread::sleep(delay); // free-tier pacing
                     }
-                    let pcm = tts_pcm16k_styled(text, &voice, style(&speed));
+                    let (pcm, source) = speak(text, &voice, &speed, &mut exhausted);
                     std::fs::write(&path, pcm16k_to_wav(&pcm)).expect("write wav");
                     generated += 1;
-                    println!("[synth] {file} ← {text:?}");
+                    println!("[synth] {file} ← {source}: {text:?}");
                 }
                 let case = json!({
                     "file": file,

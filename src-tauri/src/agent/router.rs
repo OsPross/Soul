@@ -164,6 +164,12 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
         return pr("morning_briefing", json!({}), "briefing");
     }
 
+    // „to samo na YouTube” points back at an earlier request: the follow-up resolver or the model
+    // (with the [CONTEXT] block) knows what „to samo” is — „samo” is never the query.
+    if super::context::is_same_reference(folded) {
+        return None;
+    }
+
     // YouTube (mention of youtube / yt / jutub…)
     if has_youtube(lower) {
         let query = strip_youtube_and_search_triggers(lower);
@@ -243,10 +249,23 @@ pub(super) fn match_app_verb(text: &str) -> Option<PreRoute> {
         &["na", "do", "to", "mi", "aplikacje", "aplikacja", "program", "app", "the"],
     );
     let n = name.split_whitespace().count();
-    if n == 0 || n > 4 {
+    if n == 0 || n > 4 || names_screen_item(&folded[1..]) {
         return None;
     }
     pr(tool, json!({ "name": name }), format!("app-verb:{tool}"))
+}
+
+/// „włącz drugi wynik”, „otwórz trzeci link”: something on the screen, not an app name.
+pub(crate) fn names_screen_item(folded: &[String]) -> bool {
+    const ITEMS: &[&str] = &[
+        "wynik", "wyniki", "wyniku", "link", "linka", "linku", "film", "filmik", "filmu", "wideo", "result",
+        "video",
+    ];
+    const ORDINALS: &[&str] = &[
+        "pierwsz", "drugi", "druga", "drugie", "trzec", "czwart", "piat", "szost", "ostatni", "first", "second",
+        "third", "last",
+    ];
+    folded.iter().any(|w| ITEMS.contains(&w.as_str()) || ORDINALS.iter().any(|o| w.starts_with(o)))
 }
 
 /// Words that may sit inside a now-playing question: „co (teraz) (mi) leci”.

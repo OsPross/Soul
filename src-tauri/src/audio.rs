@@ -47,6 +47,51 @@ pub(crate) type LevelEmitter = Arc<dyn Fn(f32) + Send + Sync>;
 /// 100 ms at 16 kHz — the chunk size the Live API docs recommend.
 const PCM_CHUNK_SAMPLES: usize = 1_600;
 
+/// Dev builds: the next recording plays these mono samples (at their rate) instead of the mic,
+/// so the voice E2E suite (`voice_e2e.rs`) runs the exact talk-key capture path.
+static DEV_INPUT: Mutex<Option<(Vec<f32>, u32)>> = Mutex::new(None);
+
+#[cfg(debug_assertions)]
+pub fn set_dev_input(samples: Vec<f32>, rate: u32) {
+    *DEV_INPUT.lock() = Some((samples, rate));
+}
+
+/// Like a mic: 20 ms blocks in real time, then silence while the key is still "held".
+fn play_dev_input(pcm: Vec<f32>, rate: u32, buf: Arc<Mutex<Vec<f32>>>, recording: Arc<AtomicBool>) {
+    let block = (rate / 50).max(1) as usize;
+    thread::spawn(move || {
+        let mut at = 0;
+        while recording.load(Ordering::SeqCst) {
+            let end = (at + block).min(pcm.len());
+            let mut chunk = pcm[at..end].to_vec();
+            chunk.resize(block, 0.0);
+            buf.lock().extend_from_slice(&chunk);
+            at = end;
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+}
+
+/// Any WAV (int or float, any channel count) → mono samples + rate.
+pub fn decode_wav_mono(path: &std::path::Path) -> Result<(Vec<f32>, u32), String> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let spec = reader.spec();
+    let samples: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>().map_err(|e| e.to_string())?,
+        hound::SampleFormat::Int => {
+            let max = (1i64 << (spec.bits_per_sample.max(1) - 1)) as f32;
+            reader
+                .samples::<i32>()
+                .map(|s| s.map(|v| v as f32 / max))
+                .collect::<Result<_, _>>()
+                .map_err(|e| e.to_string())?
+        }
+    };
+    let channels = spec.channels.max(1) as usize;
+    let mono = samples.chunks(channels).map(|f| f.iter().sum::<f32>() / f.len() as f32).collect();
+    Ok((mono, spec.sample_rate))
+}
+
 enum AudioCmd {
     Start {
         preferred: Option<String>,
@@ -123,29 +168,42 @@ impl AudioRecorder {
                                 samples.lock().clear();
                                 *last_error.lock() = None;
 
-                                let resolved = resolve_input_device(preferred.as_deref())?;
-                                eprintln!(
-                                    "[soul][audio] recording with device: {}{}",
-                                    resolved.name,
-                                    if resolved.used_fallback {
-                                        " (fallback to default)"
-                                    } else {
-                                        ""
-                                    }
-                                );
+                                let started = if let Some((pcm, rate)) = DEV_INPUT.lock().take() {
+                                    sample_rate = rate;
+                                    recording_flag.store(true, Ordering::SeqCst);
+                                    play_dev_input(pcm, rate, Arc::clone(&samples), Arc::clone(&recording_flag));
+                                    eprintln!("[soul][audio] recording from a dev WAV (E2E test)");
+                                    StartResult { device_name: "dev WAV".into(), used_fallback: false, notice: None }
+                                } else {
+                                    let resolved = resolve_input_device(preferred.as_deref())?;
+                                    eprintln!(
+                                        "[soul][audio] recording with device: {}{}",
+                                        resolved.name,
+                                        if resolved.used_fallback {
+                                            " (fallback to default)"
+                                        } else {
+                                            ""
+                                        }
+                                    );
 
-                                let (built, rate) = build_capture_stream(
-                                    &resolved.device,
-                                    Some(Arc::clone(&samples)),
-                                    Arc::clone(&last_error),
-                                    None,
-                                    Arc::clone(&level_bits),
-                                )?;
-                                sample_rate = rate;
-                                built
-                                    .play()
-                                    .map_err(|e| format!("Failed to start microphone: {e}"))?;
-                                record_stream = Some(built);
+                                    let (built, rate) = build_capture_stream(
+                                        &resolved.device,
+                                        Some(Arc::clone(&samples)),
+                                        Arc::clone(&last_error),
+                                        None,
+                                        Arc::clone(&level_bits),
+                                    )?;
+                                    sample_rate = rate;
+                                    built
+                                        .play()
+                                        .map_err(|e| format!("Failed to start microphone: {e}"))?;
+                                    record_stream = Some(built);
+                                    StartResult {
+                                        device_name: resolved.name,
+                                        used_fallback: resolved.used_fallback,
+                                        notice: resolved.notice,
+                                    }
+                                };
                                 recording = true;
                                 recording_flag.store(true, Ordering::SeqCst);
 
@@ -154,15 +212,11 @@ impl AudioRecorder {
                                     let flag = Arc::clone(&recording_flag);
                                     feeder = thread::Builder::new()
                                         .name("soul-pcm-feeder".into())
-                                        .spawn(move || run_pcm_feeder(samples_feeder, flag, rate, sink))
+                                        .spawn(move || run_pcm_feeder(samples_feeder, flag, sample_rate, sink))
                                         .ok();
                                 }
 
-                                Ok(StartResult {
-                                    device_name: resolved.name,
-                                    used_fallback: resolved.used_fallback,
-                                    notice: resolved.notice,
-                                })
+                                Ok(started)
                             })();
                             let _ = reply.send(result);
                         }

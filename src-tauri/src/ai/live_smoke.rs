@@ -18,33 +18,34 @@ fn key() -> String {
 
 /// Polish TTS → 16 kHz s16le mono PCM.
 fn tts_pcm16k(text: &str) -> Vec<u8> {
-    tts_pcm16k_styled(text, "Kore", "Powiedz naturalnie po polsku")
+    tts_pcm16k_with(TTS_MODEL, text, "Kore").expect("tts")
 }
 
-/// TTS with a prebuilt voice and a spoken style instruction ("Powiedz szybko po polsku").
-pub(crate) fn tts_pcm16k_styled(text: &str, voice: &str, style: &str) -> Vec<u8> {
+/// TTS of the bare text with a prebuilt voice. No style prompt: the TTS models read
+/// „Powiedz naturalnie po polsku: …” aloud. Err keeps the API error (quota ids) for rotation.
+pub(crate) fn tts_pcm16k_with(model: &str, text: &str, voice: &str) -> Result<Vec<u8>, String> {
     let body = json!({
-        "contents": [{ "parts": [{ "text": format!("{style}: {text}") }] }],
+        "contents": [{ "parts": [{ "text": text }] }],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": { "voiceConfig": { "prebuiltVoiceConfig": { "voiceName": voice } } }
         }
     });
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{TTS_MODEL}:generateContent"
-    );
+    let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
     let resp: Value = reqwest::blocking::Client::new()
         .post(url)
         .timeout(Duration::from_secs(60))
         .header("x-goog-api-key", key())
         .json(&body)
         .send()
-        .expect("tts request")
-        .json()
-        .expect("tts json");
+        .and_then(|r| r.json())
+        .map_err(|e| format!("tts request: {}", crate::ai::gemini::redact_secrets(&e.to_string())))?;
+    if let Some(e) = resp.get("error") {
+        return Err(format!("tts {model}: {e}"));
+    }
     let part = resp
         .pointer("/candidates/0/content/parts/0/inlineData")
-        .unwrap_or_else(|| panic!("no audio in TTS response: {}", resp.to_string().chars().take(300).collect::<String>()));
+        .ok_or_else(|| format!("no audio in TTS response: {}", resp.to_string().chars().take(300).collect::<String>()))?;
     let mime = part["mimeType"].as_str().unwrap_or("");
     let rate: u32 = mime
         .split("rate=")
@@ -52,7 +53,7 @@ pub(crate) fn tts_pcm16k_styled(text: &str, voice: &str, style: &str) -> Vec<u8>
         .and_then(|r| r.split(';').next())
         .and_then(|r| r.parse().ok())
         .unwrap_or(24_000);
-    let raw = BASE64.decode(part["data"].as_str().unwrap()).unwrap();
+    let raw = BASE64.decode(part["data"].as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
     let samples: Vec<f32> = raw
         .as_chunks::<2>().0.iter()
         .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / i16::MAX as f32)
@@ -65,7 +66,7 @@ pub(crate) fn tts_pcm16k_styled(text: &str, voice: &str, style: &str) -> Vec<u8>
         out.extend_from_slice(&((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
     }
     println!("tts: {text:?} → {} ms of audio (src {rate} Hz)", out.len() / 32);
-    out
+    Ok(out)
 }
 
 /// Stream like a held hotkey: 100 ms chunks at ~real time (sped up 4× to keep the test short).

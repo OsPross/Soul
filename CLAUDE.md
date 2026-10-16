@@ -150,6 +150,11 @@ Unit tests: `cargo test --manifest-path src-tauri/Cargo.toml --lib`. Live end-to
 (`voice_regression.rs`; `voice_synth.rs` = TTS samples, `dev_samples.rs` = Settings recorder; `SOUL_DRY_RUN=1` = agent tools logged, not run).
 Wake word harness (offline, no key; `tests/voice/wake/`, writes `wake/report.md`): `npm run test:voice -- --wake` (`wake_regression.rs`;
 `wake_tune` = parameter sweep; `wake::cpu_live` = live CPU on the default mic). `scripts/test-voice.mjs` picks the test.
+Voice E2E (`voice_e2e.rs`, `tests/e2e/`): `npm run test:e2e:synth` (Gemini TTS + noise/quiet/pad variants → `generated/`, gitignored)
+then `npm run test:e2e` — starts the dev app with `SOUL_E2E=1` (`e2e.rs`: `[soul][e2e] {json}` trace lines, confirmations answered
+by the case) and plays each WAV via `<app data>/dev-utterance.json` into the recorder (`audio::set_dev_input`, dev builds only) →
+real Live/router/tools/agent/Vio; `SOUL_DRY_RUN_TOOLS` = risky tools only logged. Checks Vio page state; backs up and restores
+settings + memory DB; needs Vio with its API on and Soul closed. Writes `tests/e2e/voice/report.md`.
 `half` is pinned to 2.4.1 in `Cargo.toml`: rustpotter's candle-core 0.2 breaks with half ≥ 2.5 (rand_distr 0.5).
 Test binaries have no Tauri comctl32 manifest — code reachable from a test must not call into Tauri windowing/events
 (e.g. `audio::build_capture_stream` takes a `LevelEmitter` callback, not an `AppHandle`), or the test exe fails to load

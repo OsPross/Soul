@@ -113,7 +113,7 @@ impl Host for AppHost {
                 pool.record(&model, now);
                 drop(pool);
                 eprintln!("[soul][agent] model={model} ({reason}, limit {}/min)", models[i].1);
-                match GeminiClient::new(&key, &model).agent_generate_once(body.clone()) {
+                match GeminiClient::new(&key, &model).agent_generate_once(body.clone(), super::MODEL_REQUEST_TIMEOUT) {
                     Ok(v) => return Ok(v),
                     Err((status, msg)) => {
                         let msg = crate::ai::gemini::redact_secrets(&msg);

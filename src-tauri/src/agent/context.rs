@@ -284,8 +284,24 @@ pub fn resolve_followup(text: &str, last: &ToolUse) -> Option<PreRoute> {
                 None
             }
         }
+        // „a teraz to samo na YouTube” / „to samo w Google”: the previous query, other engine.
+        "web_search" | "youtube_search" | "youtube_play" if is_same_reference(&words) => {
+            let query = last.args.get("query").and_then(Value::as_str)?;
+            if has(&["youtube", "youtubie", "jutub", "jutubie", "yt"]) {
+                route("youtube_search", json!({ "query": query }))
+            } else if has(&["google", "googlu", "internecie", "necie", "web", "przegladarce"]) {
+                route("web_search", json!({ "query": query }))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
+}
+
+/// „to samo”, „tego samego”, „the same”: the utterance points back at the previous request.
+pub fn is_same_reference(words: &[String]) -> bool {
+    words.iter().any(|w| matches!(w.as_str(), "samo" | "samego" | "same"))
 }
 
 // ───────────────────────────── shared state ─────────────────────────────
@@ -560,6 +576,15 @@ mod tests {
         // Questions are for the model (with the [CONTEXT] block).
         let search = tool("web_search", json!({ "query": "pogoda Kraków" }));
         assert!(resolve_followup("a jutro?", &search).is_none());
+
+        // „to samo na YouTube”: the previous query on the other engine (never a search for „samo”).
+        let bigos = tool("web_search", json!({ "query": "przepis na bigos" }));
+        let r = resolve_followup("A teraz to samo na YouTube.", &bigos).unwrap();
+        assert_eq!((r.tool.as_str(), &r.args), ("youtube_search", &json!({ "query": "przepis na bigos" })));
+        let yt = tool("youtube_search", json!({ "query": "queen" }));
+        assert_eq!(resolve_followup("to samo w Google", &yt).unwrap().tool, "web_search");
+        assert!(resolve_followup("to samo", &yt).is_none());
+        assert!(router::match_command("A teraz to samo na YouTube.").is_none());
     }
 
     #[test]

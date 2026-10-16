@@ -194,6 +194,16 @@ pub fn find(name: &str) -> Option<Scene> {
         .find(|s| fold(&s.name) == want)
         .or_else(|| scenes.iter().find(|s| s.triggers.iter().any(|t| fold(t) == want)))
         .or_else(|| scenes.iter().find(|s| want.contains(&fold(&s.name)) && fold(&s.name).len() >= 4))
+        .or_else(|| {
+            // A misheard name („wietrzu” for „wieczór”): the phonetic match used for triggers.
+            let said = phonetic_tokens(&want);
+            scenes
+                .iter()
+                .map(|s| (trigger_score(&said, &phonetic_tokens(&s.name)), s))
+                .filter(|(score, _)| *score >= TRIGGER_THRESHOLD)
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, s)| s)
+        })
         .cloned()
 }
 
@@ -233,6 +243,10 @@ fn phonetic_tokens(s: &str) -> Vec<String> {
         .filter(|w| !w.is_empty())
         .map(|w| {
             let mut k = w
+                // Polish homophones: trz ≈ cz, rz ≈ ż, ch ≈ h („wietrzu” ≈ „wieczór”).
+                .replace("trz", "cz")
+                .replace("rz", "z")
+                .replace("ch", "h")
                 .replace("ph", "f")
                 .replace("ck", "k")
                 .replace("qu", "kw")
@@ -525,6 +539,9 @@ mod tests {
         // One-word triggers must be the whole utterance.
         assert!(score("Kodowanie", "kodowanie") >= TRIGGER_THRESHOLD);
         assert!(score("Kodowanie w Ruście jest fajne", "kodowanie") < TRIGGER_THRESHOLD);
+        // Polish homophones (a misheard scene name in the voice E2E suite).
+        assert!(score("wietrzu", "wieczór") >= TRIGGER_THRESHOLD);
+        assert!(score("wiosna", "wieczór") < TRIGGER_THRESHOLD);
     }
 
     #[test]

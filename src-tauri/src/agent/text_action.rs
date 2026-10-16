@@ -7,10 +7,10 @@
 //! on the Island; info actions show the result on the Island with „Kopiuj” / „Wklej”.
 
 use super::router::{fold_word, strip_filler};
-use crate::ai::gemini::{reply_language_rule, GeminiClient};
+use crate::ai::gemini::reply_language_rule;
 use crate::config::load_settings;
 use crate::platform::Platform;
-use crate::{emit_overlay, resolve_fallback_model, AppState};
+use crate::{emit_overlay, AppState};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -220,13 +220,19 @@ struct TextResultPayload {
 /// Blocking: runs on the command's worker thread.
 pub fn run(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction) -> Result<String, String> {
     super::context::note_tool(super::context::TEXT_ACTION_TOOL, &action.args(), true);
-    if super::dry_run() {
+    if super::dry_run(super::context::TEXT_ACTION_TOOL) {
         eprintln!("[soul][agent] dry_run text_action={} (selection not read)", action.id());
+        crate::e2e::trace("tool", serde_json::json!({ "name": "text_action", "args": action.args(), "ok": true, "dry_run": true }));
         return Ok("dry-run: text_action was not executed".into());
     }
     eprintln!("[soul][agent] text_action={}", action.id());
     crate::island::emit_tool_labeled(app, "text_action", Some(&action.label()), "start");
     let result = run_inner(app, platform, action);
+    crate::e2e::trace(
+        "tool",
+        serde_json::json!({ "name": "text_action", "args": action.args(), "ok": result.is_ok(),
+            "result": result.as_ref().unwrap_or_else(|e| e) }),
+    );
     crate::island::emit_tool_labeled(
         app,
         "text_action",
@@ -259,9 +265,13 @@ fn run_inner(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction)
         ));
     }
     let _ = emit_overlay(app, "thinking", Some(format!("{}…", action.label())));
-    let client = GeminiClient::new(&settings.api_key, settings.effective_ask_model());
-    let fallback = resolve_fallback_model(&settings, &crate::ai::gemini::cached_models());
-    let out = client.text_action(&action.instruction(&settings.language), &selection, Some(&fallback))?;
+    // The agent's model pool: rotates over every available model on 503 / 429 / a slow answer.
+    let model = crate::agent::computer::Host::model(&crate::agent::computer::host::AppHost::new(app));
+    let body = crate::ai::gemini::text_action_body(&action.instruction(&settings.language), &selection);
+    let out = crate::ai::gemini::clean_text_action_output(&crate::ai::gemini::extract_text_from_value(&model(body)?)?);
+    if out.trim().is_empty() {
+        return Err("Gemini returned an empty result.".into());
+    }
     eprintln!(
         "[soul][agent] text_action done ms={} chars={}",
         t0.elapsed().as_millis(),
