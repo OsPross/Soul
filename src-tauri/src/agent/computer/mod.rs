@@ -9,6 +9,8 @@
 pub mod action;
 pub mod config;
 mod exec;
+#[cfg(test)]
+mod harness;
 pub mod host;
 pub mod intent;
 pub mod killswitch;
@@ -165,6 +167,7 @@ pub fn run_task(host: &dyn Host, task: &str) -> Outcome {
         );
     }
     eprintln!("[soul][agent] computer task start chars={} max_steps={}", run.task.chars().count(), run.cfg.max_steps);
+    crate::platform::prefer_physical_pixels();
     let _kill = killswitch::Guard::start(Arc::clone(&platform));
     host.capture_exclusion(true);
     let _exclusion = ExclusionGuard(host);

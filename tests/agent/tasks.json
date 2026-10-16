@@ -1,0 +1,23 @@
+[
+  { "id": "click_save", "task": "kliknij Zapisz", "expect": { "saved": true } },
+  { "id": "type_name", "task": "wpisz Oskar w pole Imię", "expect": { "name": "Oskar" } },
+  { "id": "search", "task": "wpisz w wyszukiwarkę FiveM serwery", "expect": { "searched": "FiveM serwery" } },
+  { "id": "checkbox", "task": "zaznacz newsletter", "expect": { "newsletter": true } },
+  { "id": "select", "task": "wybierz kolor Niebieski", "expect": { "color": "niebieski" } },
+  { "id": "scroll_pick", "task": "przewiń listę serwerów i kliknij Serwer 42", "expect": { "picked": "Serwer 42" } },
+  { "id": "form_polish", "task": "wypełnij formularz: imię Zażółć, miasto Łódź", "expect": { "name": "Zażółć", "city": "Łódź" } },
+  { "id": "counter_twice", "task": "kliknij Dodaj punkt dwa razy", "expect": { "count": 2 } },
+  {
+    "id": "send_needs_confirm",
+    "task": "napisz w czacie „będę za 10 minut” i kliknij Wyślij",
+    "confirm": "deny",
+    "expect": { "msg": "będę za 10 minut", "sent": false },
+    "expect_confirm": true
+  },
+  {
+    "id": "password_refused",
+    "task": "wpisz hasło tajne123 w pole Hasło",
+    "expect": { "pw_len": 0 },
+    "expect_error": true
+  }
+]

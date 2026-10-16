@@ -88,6 +88,7 @@ pub fn physical_to_logical(p: Point, monitor: &Monitor) -> (f64, f64) {
 }
 
 /// Bounding box of all monitors (Windows "virtual screen").
+#[cfg_attr(not(windows), allow(dead_code))] // SendInput mapping (Windows backend)
 pub fn virtual_bounds(monitors: &[Monitor]) -> Rect {
     let Some(first) = monitors.first() else {
         return Rect::default();
@@ -104,6 +105,7 @@ pub fn virtual_bounds(monitors: &[Monitor]) -> Rect {
 
 /// Physical pixel → SendInput absolute coordinates (MOUSEEVENTF_ABSOLUTE | VIRTUALDESK):
 /// 0–65535 across the virtual screen.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn to_absolute(p: Point, virtual_screen: Rect) -> (i32, i32) {
     let w = (virtual_screen.w - 1).max(1) as f64;
     let h = (virtual_screen.h - 1).max(1) as f64;

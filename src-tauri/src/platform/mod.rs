@@ -176,6 +176,19 @@ pub trait Platform: Send + Sync {
     }
 }
 
+/// Make the calling thread use physical pixels (per-monitor DPI aware) — the app is, through its
+/// manifest; test binaries are not. No-op outside Windows.
+pub fn prefer_physical_pixels() {
+    #[cfg(target_os = "windows")]
+    windows_uia::ensure_dpi_aware_thread();
+}
+
+/// Harness only: open an app / settings URI the way Explorer would.
+#[cfg(all(test, target_os = "windows"))]
+pub fn open_path_for_tests(target: &str) -> Result<(), String> {
+    windows::shell_open(target)
+}
+
 /// Native id of a Tauri window (HWND on Windows) for `exclude_from_capture` / `activate_window`.
 pub fn native_window_id(win: &tauri::WebviewWindow) -> Option<u64> {
     #[cfg(target_os = "windows")]
