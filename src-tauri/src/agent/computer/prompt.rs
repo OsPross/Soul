@@ -23,7 +23,10 @@ turn. browser_fill replaces a field's text; browser_open opens a URL in a new ta
 browser_list_tabs); browser_read_page returns the page text as READ in the next turn.\n\
 - To answer about the page (which fields are empty, what it says, a summary) read the list or call \
 browser_read_page, then answer with done(summary); a page summary may take up to three sentences.\n\
-- Fill only the values the TASK gives; never invent data for other fields.\n\
+- Fill only the values the TASK gives; never invent data for other fields. Lines with `type=select|time|date…` \
+are not text fields: browser_fill clicks radios / checkboxes for you; a failed fill is only a note, the task goes on.\n\
+- Never call the same function with the same arguments twice in a row. To summarize or read the page, call \
+browser_read_page once on the active tab, then done(summary).\n\
 - If a call fails with 'forbidden' (private / Tor / internal tab, password field), never try another way.\n";
 
 pub fn system_prompt(language: &str, browser: bool) -> String {

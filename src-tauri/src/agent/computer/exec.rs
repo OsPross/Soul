@@ -371,7 +371,28 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
             c.call("click", json!({ "tabId": tab, "ref": vref(target)? }))?;
         }
         Action::TypeText { target: Some(t), text, submit, .. } => {
-            c.call("fill", json!({ "tabId": tab, "ref": vref(t)?, "text": text }))?;
+            let r = vref(t)?;
+            let skipped = |why: &str| Ok(Performed { verified: true, detail: format!(" — NOT filled: {why}"), read: None });
+            let plan = match t {
+                Target::Id(id) => cx.snap.get(*id).map(|e| vio::fill_plan(e, text)).unwrap_or(vio::FillPlan::Text),
+                Target::Point { .. } => vio::FillPlan::Text,
+            };
+            match plan {
+                vio::FillPlan::Skip(why) => return skipped(&why),
+                vio::FillPlan::AlreadySet => return Ok(Performed { verified: true, detail: " (already set)".into(), read: None }),
+                vio::FillPlan::Click => {
+                    c.call("click", json!({ "tabId": tab, "ref": r }))?;
+                }
+                vio::FillPlan::Text => {
+                    if let Err(e) = c.call("fill", json!({ "tabId": tab, "ref": r, "text": text })) {
+                        // Never end the task over a field type: the model decides what to do next.
+                        if e.contains("not a text field") {
+                            return skipped(&format!("{e}. It is not a text field; click it, or skip it and say so in done."));
+                        }
+                        return Err(e);
+                    }
+                }
+            }
             if *submit {
                 killswitch::sleep(Duration::from_millis(80));
                 key("Enter")?;

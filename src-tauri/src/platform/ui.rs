@@ -175,6 +175,8 @@ pub struct UiElement {
     pub scroll_pct: Option<f64>,
     /// Form field without a value (Vio's `empty` flag).
     pub empty: bool,
+    /// Web fields that are not plain text: `select`, `time`, `date`, `range`… (empty = text-like).
+    pub kind: String,
     /// Backend index into its element cache (order before `finalize`).
     #[serde(skip)]
     pub backend_index: usize,
@@ -199,6 +201,7 @@ impl UiElement {
             web: false,
             scroll_pct: None,
             empty: false,
+            kind: String::new(),
             backend_index: 0,
         }
     }
@@ -500,6 +503,9 @@ impl UiSnapshot {
             }
             if e.selected == Some(true) {
                 out.push_str(" selected");
+            }
+            if !e.kind.is_empty() {
+                out.push_str(&format!(" type={}", e.kind));
             }
             if e.empty {
                 out.push_str(" empty");

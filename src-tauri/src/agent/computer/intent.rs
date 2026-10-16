@@ -146,6 +146,20 @@ pub fn is_browser_phrase(text: &str) -> bool {
     (names_browser(text) && words.len() >= 3) || (PAGE_VERBS.contains(&first.as_str()) && has(PAGE_NOUNS))
 }
 
+/// „przeczytaj / streść / podsumuj tę stronę”: answered from the page text, no clicking.
+pub fn is_read_page_task(text: &str) -> bool {
+    let words = words_after_fillers(text);
+    words.first().is_some_and(|w| matches!(w.as_str(), "przeczytaj" | "stresc" | "streszcz" | "podsumuj" | "read" | "summarize" | "summarise"))
+        && words.iter().any(|w| PAGE_NOUNS.contains(&w.as_str()))
+}
+
+/// The user points at what is in front of them („na ekranie”, „na tej stronie”, „w formularzu”).
+pub fn refers_to_screen(text: &str) -> bool {
+    let words = words_after_fillers(text);
+    let joined = format!(" {} ", words.join(" "));
+    is_screen_question(&words) || SCREEN_PLACES.iter().any(|p| joined.contains(&format!(" {p} ")))
+}
+
 /// Places on the screen (folded, locative): the command is about the UI in front of the user.
 const SCREEN_PLACES: &[&str] = &[
     "w formularzu", "na ekranie", "na tej stronie", "w tym oknie", "w tym polu", "w polu", "on the screen",
@@ -484,5 +498,17 @@ mod tests {
         // A named target needs the model.
         assert!(local_plan("przewiń listę serwerów w dół", &s).is_none());
         assert!(local_plan("przewiń", &s).is_none());
+    }
+
+    #[test]
+    fn read_page_tasks_and_screen_references() {
+        assert!(is_read_page_task("streść mi tą stronę"));
+        assert!(is_read_page_task("przeczytaj tę stronę"));
+        assert!(!is_read_page_task("wypełnij formularz"));
+        assert!(!is_read_page_task("streść artykuł"));
+        assert!(refers_to_screen("co jest na ekranie"));
+        assert!(refers_to_screen("przeczytaj co jest na tej stronie"));
+        assert!(!refers_to_screen("streść tę stronę"));
+        assert!(is_browser_phrase("streść mi tą stronę"));
     }
 }

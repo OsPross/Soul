@@ -134,6 +134,8 @@ struct Run<'a> {
     history: Vec<String>,
     fails_in_row: u32,
     last_failed: bool,
+    /// The previous model call (name + action) — an identical repeat is not executed.
+    last_sig: Option<String>,
     want_look: bool,
     note: Option<String>,
     monitors: Vec<Monitor>,
@@ -167,6 +169,7 @@ pub fn run_task(host: &dyn Host, task: &str) -> Outcome {
         history: Vec::new(),
         fails_in_row: 0,
         last_failed: false,
+        last_sig: None,
         want_look: false,
         note: None,
         monitors: Vec::new(),
@@ -282,7 +285,9 @@ impl Run<'_> {
             return None;
         }
         let fg = self.platform.foreground_window().filter(|w| (w.pid != 0 && w.pid == c.pid()) || vio::is_vio_process(&w.process));
-        if fg.is_none() && !intent::names_browser(&self.task) {
+        // A web task goes to Vio even when another browser is in front, unless the user points at the screen.
+        let web = intent::names_browser(&self.task) || (intent::is_browser_phrase(&self.task) && !intent::refers_to_screen(&self.task));
+        if fg.is_none() && !web {
             return None;
         }
         if state == vio::State::Authorizing {
@@ -290,6 +295,12 @@ impl Run<'_> {
             if let Err(e) = c.wait_ready(vio::AUTH_TIMEOUT) {
                 eprintln!("[soul][agent] vio not ready: {e} — UI Automation");
                 return None;
+            }
+        }
+        if fg.is_none() {
+            // Bring Vio to the front (best effort); its tab list is what the task works on.
+            if let Err(e) = self.platform.focus_app("Vio") {
+                eprintln!("[soul][agent] vio focus failed: {e}");
             }
         }
         Some((Arc::clone(c), fg))
@@ -449,7 +460,13 @@ impl Run<'_> {
             let mut region = self.region(&snap);
 
             // ── decide ──
-            let local = if self.step == 1 { intent::local_plan(&self.task, &snap) } else { None };
+            let local = if self.step == 1 {
+                intent::local_plan(&self.task, &snap)
+                    // „streść tę stronę” in Vio: read the active tab right away, the model only answers.
+                    .or_else(|| (tab.is_some() && intent::is_read_page_task(&self.task)).then(read_page_plan))
+            } else {
+                None
+            };
             let from_model = local.is_none();
             let mut shot_taken = false;
             let decision: Decision = match local {
@@ -506,6 +523,24 @@ impl Run<'_> {
                 }
             };
             self.want_look = decision.look;
+
+            // ── loop guard: the same call twice in a row is not run again ──
+            let sig = format!("{} {:?}", decision.name, decision.action);
+            let repeatable = matches!(decision.action, Action::Scroll { .. } | Action::Wait(_) | Action::KeyCombo(_) | Action::Done(_) | Action::AskUser(_));
+            if from_model && !repeatable && self.last_sig.as_deref() == Some(sig.as_str()) {
+                let hint = repeat_hint(&self.task, tab.is_some());
+                eprintln!("[soul][agent] computer repeated call {} — not executed", decision.name);
+                self.fails_in_row += 1;
+                self.last_failed = true;
+                self.history.push(format!("{} → NOT RUN: identical to the previous call. {hint}", decision.name));
+                self.note = Some(hint);
+                if self.fails_in_row >= MAX_FAILS_IN_ROW {
+                    let msg = tr(self.lang, "Zapętliłem się — przerywam.", "I'm going in circles — stopping.");
+                    return self.finish(Err(msg.into()), Phase::Failed);
+                }
+                continue;
+            }
+            self.last_sig = Some(sig);
 
             // ── terminal actions ──
             match &decision.action {
@@ -646,6 +681,20 @@ impl Run<'_> {
                 }
             }
         }
+    }
+}
+
+/// A page read as the first (model-free) step of „streść / przeczytaj tę stronę”.
+fn read_page_plan() -> Decision {
+    Decision { action: Action::Browser(action::BrowserOp::ReadPage), risky: false, final_step: false, look: false, name: "browser_read_page".into() }
+}
+
+/// What to tell the model after it repeated an identical call.
+fn repeat_hint(task: &str, vio: bool) -> String {
+    if vio && intent::is_read_page_task(task) {
+        "You already have this. Call browser_read_page once (not browser_list_tabs) and then answer with done(summary).".into()
+    } else {
+        "Do not repeat it: its result is already above. Pick a different action, or finish with done / ask_user.".into()
     }
 }
 

@@ -1555,6 +1555,26 @@ fn heal_settings_models(settings: &mut Settings, models: &[GeminiModelInfo]) -> 
     changes
 }
 
+/// Retire a pool model the user did not configure: only the ledger is written (no `/models` GET,
+/// no notice). A configured model goes through the full heal.
+pub(crate) fn retire_model_quietly(app: &AppHandle, retired: &str) {
+    let retired = normalize_model_id(retired);
+    let Ok(mut settings) = load_settings(app) else { return };
+    let in_use = [&settings.model, &settings.ask_model, &settings.fallback_model, &settings.dictation_model, &settings.commands_model]
+        .iter()
+        .any(|m| normalize_model_id(m) == retired);
+    if in_use {
+        return retire_model_and_heal(app, &retired);
+    }
+    if !is_retired_id(&retired, &settings.retired_models) {
+        settings.retired_models.push(retired.clone());
+        match save_settings(app, &settings) {
+            Ok(()) => eprintln!("[soul][agent] model '{retired}' retired (not available for this key)"),
+            Err(e) => eprintln!("[soul] failed to persist retired model: {e}"),
+        }
+    }
+}
+
 /// Mark a model retired (404 / no longer available), auto-pick replacements, persist + notify.
 pub(crate) fn retire_model_and_heal(app: &AppHandle, retired: &str) {
     let retired = normalize_model_id(retired);

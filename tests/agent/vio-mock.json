@@ -16,7 +16,9 @@
         { "ref": "e4", "role": "textbox", "tag": "input", "type": "password", "label": "Hasło", "name": "haslo", "placeholder": "", "value": "", "empty": true },
         { "ref": "e5", "role": "checkbox", "tag": "input", "type": "checkbox", "label": "Newsletter", "name": "newsletter", "placeholder": "", "value": "", "empty": false, "checked": false },
         { "ref": "e6", "role": "button", "tag": "button", "type": "submit", "label": "Wyślij", "name": "", "placeholder": "", "value": "", "empty": false },
-        { "ref": "e7", "role": "button", "tag": "button", "type": "button", "label": "Dalej", "name": "", "placeholder": "", "value": "", "empty": false, "expireOnce": true }
+        { "ref": "e7", "role": "button", "tag": "button", "type": "button", "label": "Dalej", "name": "", "placeholder": "", "value": "", "empty": false, "expireOnce": true },
+        { "ref": "e8", "role": "textbox", "tag": "input", "type": "time", "label": "Godzina dostawy", "name": "godzina", "placeholder": "", "value": "", "empty": true },
+        { "ref": "e9", "role": "combobox", "tag": "select", "type": "", "label": "Rozmiar", "name": "rozmiar", "placeholder": "", "value": "M", "empty": false }
       ]
     },
     {
@@ -82,6 +84,36 @@
       "script": [["browser_fill", { "id": 4, "text": "tajne123" }]],
       "expect_error": true,
       "expect": { "values": { "Hasło": "" } }
+    },
+    {
+      "id": "vio_non_text_fields_do_not_end_the_task",
+      "task": "wypełnij formularz: godzina 12:00, rozmiar L, miasto Łódź",
+      "script": [
+        ["browser_fill", { "id": 8, "text": "12:00" }],
+        ["browser_fill", { "id": 9, "text": "L" }],
+        ["browser_fill", { "id": 3, "text": "Łódź", "final": true }]
+      ],
+      "expect": { "values": { "Miasto": "Łódź", "Godzina dostawy": "" } },
+      "expect_prompt": ["NOT filled", "type=time", "type=select"]
+    },
+    {
+      "id": "vio_read_page_is_planned_locally",
+      "task": "streść mi tę stronę",
+      "script": [["done", { "summary": "Formularz zgłoszeniowy, zgłoszenia do piątku." }]],
+      "expect_summary": ["piątk"],
+      "expect_prompt": ["Zgłoszenia przyjmujemy do piątku"]
+    },
+    {
+      "id": "vio_repeated_call_is_not_run_again",
+      "task": "sprawdź które pola są puste",
+      "script": [
+        ["browser_list_tabs", {}],
+        ["browser_list_tabs", {}],
+        ["browser_list_tabs", {}],
+        ["done", { "summary": "Puste są E-mail i Miasto." }]
+      ],
+      "expect_summary": ["E-mail"],
+      "expect_prompt": ["identical to the previous call"]
     },
     {
       "id": "vio_open_url",

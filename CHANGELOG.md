@@ -18,6 +18,17 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- Soul Agent / model pool: retired models (404) are skipped for good, also before the ledger is written,
+  and models missing from the key's list are never picked; no `/models` request per step. A model
+  that fails (429 / 503 / 400 / network) rests for 60 s. A model that rejects the MINIMAL thinking
+  level is retried with LOW, then without thinking, and the working setting is remembered. Only one
+  model call per step is in flight.
+- Soul Agent / Vio: identical repeated calls are not run again (the model gets a hint); „streść tę stronę”
+  reads the active tab straight away. `browser_fill` on select / time / date fields no longer ends the task:
+  radios and checkboxes are clicked, the rest is reported to the model as a note. Web tasks go to Vio
+  even when another browser is in front (unless you point at the screen).
+- „Weź mi przecież tego YouTube.” just opens YouTube; filler words and a leading „i” no longer end up in
+  search queries.
 - Soul Agent no longer fails on free-tier limits: model calls rotate through a pool (3.1 / 3.5 /
   2.5 flash-lite, 3 / 3.7 / 3.6 flash — only those your key lists), each with a client-side
   requests-per-minute limit (`modelRpm` in the agent config, defaults 15/15/10/5/5/5). A 429/503

@@ -112,6 +112,9 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
                 if e["type"] == json!("password") {
                     return Err("forbidden: password field".into());
                 }
+                if matches!(e["type"].as_str(), Some("time" | "date" | "radio" | "checkbox")) || e["tag"] == json!("select") {
+                    return Err("element is not a text field".into());
+                }
                 let text = a["text"].as_str().unwrap_or("");
                 e["value"] = json!(text);
                 e["empty"] = json!(text.is_empty());

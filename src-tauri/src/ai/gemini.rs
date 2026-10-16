@@ -740,7 +740,14 @@ impl GeminiClient {
     /// One agent request on this client's model, no fallback: the model pool (`ai::pool`) rotates
     /// itself. Err = (HTTP status, message).
     pub fn agent_generate_once(&self, body: Value) -> Result<Value, (Option<u16>, String)> {
-        self.post_generate_json(body, "agent").map_err(|e| (e.status, e.message))
+        loop {
+            match self.post_generate_json(body.clone(), "agent") {
+                Ok(v) => return Ok(v),
+                // The thinking setting is adapted per model on every attempt (`adapt_thinking_config`).
+                Err(e) if thinking_step_down(&self.model, e.status, &e.message) => continue,
+                Err(e) => return Err((e.status, e.message)),
+            }
+        }
     }
 
     /// Voice-command agent: audio in → function calls out (caller executes tools).
@@ -1401,19 +1408,50 @@ fn build_dictation_body(wav_bytes: &[u8], language: &str) -> Result<Value, Strin
 /// Minimal thinking, in the form each model accepts. Gemini 3.5+ rejects
 /// `thinkingBudget` (HTTP 400) and wants `thinkingLevel`; older ids keep `thinkingBudget: 0`.
 /// Applied at send time so one body works across primary and fallback models.
+/// Thinking setting per model: 0 = the cheapest (MINIMAL level / budget 0), 1 = LOW, 2 = omitted.
+/// Some models reject MINIMAL (400 "Thinking level MINIMAL is not supported"); the working step
+/// is remembered for the session.
+fn thinking_steps() -> &'static Mutex<HashMap<String, u8>> {
+    static M: OnceLock<Mutex<HashMap<String, u8>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn thinking_config_for(uses_level: bool, step: u8) -> Option<Value> {
+    match (uses_level, step) {
+        (true, 0) => Some(serde_json::json!({ "thinkingLevel": "minimal" })),
+        (true, 1) => Some(serde_json::json!({ "thinkingLevel": "low" })),
+        (false, 0) => Some(serde_json::json!({ "thinkingBudget": 0 })),
+        _ => None,
+    }
+}
+
+/// A 400 about the thinking setting: try the next step for this model. False = nothing left.
+fn thinking_step_down(model: &str, status: Option<u16>, message: &str) -> bool {
+    if status != Some(400) || !message.to_ascii_lowercase().contains("thinking") {
+        return false;
+    }
+    let mut m = thinking_steps().lock();
+    let step = m.entry(normalize_model_id(model)).or_insert(0);
+    if *step >= 2 {
+        return false;
+    }
+    *step += 1;
+    eprintln!("[soul][gemini] model '{model}' rejects its thinking setting — retrying with step {step}");
+    true
+}
+
 fn adapt_thinking_config(body: &mut Value, model: &str) {
     let uses_level = parse_gemini_version(model).is_some_and(|v| v >= (3, 5));
+    let step = thinking_steps().lock().get(&normalize_model_id(model)).copied().unwrap_or(0);
     for key in ["generation_config", "generationConfig"] {
         let Some(cfg) = body.get_mut(key).and_then(Value::as_object_mut) else {
             continue;
         };
         if cfg.contains_key("thinkingConfig") {
-            let tc = if uses_level {
-                serde_json::json!({ "thinkingLevel": "minimal" })
-            } else {
-                serde_json::json!({ "thinkingBudget": 0 })
+            match thinking_config_for(uses_level, step) {
+                Some(tc) => cfg.insert("thinkingConfig".into(), tc),
+                None => cfg.remove("thinkingConfig"),
             };
-            cfg.insert("thinkingConfig".into(), tc);
         }
     }
 }
@@ -1792,6 +1830,31 @@ fn friendly_api_error(status: u16, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thinking_level_steps_down_per_model() {
+        let model = "gemini-9.9-test-think";
+        let body = || serde_json::json!({ "generationConfig": { "thinkingConfig": { "thinkingBudget": 1 } } });
+        let mut b = body();
+        adapt_thinking_config(&mut b, model);
+        assert_eq!(b.pointer("/generationConfig/thinkingConfig/thinkingLevel"), Some(&serde_json::json!("minimal")));
+        let err = "Gemini rejected the request (400). Thinking level MINIMAL is not supported for this model";
+        assert!(!thinking_step_down(model, Some(429), err), "only a 400");
+        assert!(!thinking_step_down(model, Some(400), "Invalid argument: contents"), "only thinking errors");
+        assert!(thinking_step_down(model, Some(400), err));
+        let mut b = body();
+        adapt_thinking_config(&mut b, model);
+        assert_eq!(b.pointer("/generationConfig/thinkingConfig/thinkingLevel"), Some(&serde_json::json!("low")));
+        assert!(thinking_step_down(model, Some(400), err));
+        let mut b = body();
+        adapt_thinking_config(&mut b, model);
+        assert!(b.pointer("/generationConfig/thinkingConfig").is_none(), "omitted at the last step");
+        assert!(!thinking_step_down(model, Some(400), err), "nothing left");
+        // Other models keep the default.
+        let mut b = body();
+        adapt_thinking_config(&mut b, "gemini-9.9-other");
+        assert!(b.pointer("/generationConfig/thinkingConfig/thinkingLevel").is_some());
+    }
 
     #[test]
     fn reply_language_is_pinned_to_polish_not_topic() {

@@ -413,7 +413,42 @@ fn element(v: &Value) -> Option<UiElement> {
     e.value = Some(text(v, "value")).filter(|s| !s.is_empty() && !e.password);
     e.checked = v["checked"].as_bool();
     e.empty = v["empty"].as_bool() == Some(true);
+    e.kind = match (tag.as_str(), ty.as_str()) {
+        ("select", _) => "select".into(),
+        ("input", t @ ("time" | "date" | "datetime-local" | "month" | "week" | "color" | "range" | "file")) => t.into(),
+        _ => String::new(),
+    };
     Some(e)
+}
+
+/// How `browser_fill` is carried out for an element (Vio's `fill` only types into text fields).
+#[derive(Debug, PartialEq)]
+pub enum FillPlan {
+    Text,
+    /// Radio / checkbox: one click.
+    Click,
+    /// Checkbox already in the wanted state.
+    AlreadySet,
+    /// Cannot be done through the API: a note for the model (the task goes on).
+    Skip(String),
+}
+
+pub fn fill_plan(e: &UiElement, text: &str) -> FillPlan {
+    let t = text.trim().to_lowercase();
+    let want = !matches!(t.as_str(), "nie" | "no" | "false" | "off" | "0" | "odznacz" | "wyłącz" | "wylacz" | "uncheck");
+    match (e.role, e.kind.as_str()) {
+        (Role::Radio, _) => if e.checked == Some(true) { FillPlan::AlreadySet } else { FillPlan::Click },
+        (Role::CheckBox, _) => if e.checked == Some(want) { FillPlan::AlreadySet } else { FillPlan::Click },
+        (_, "select") => FillPlan::Skip(
+            "this is a <select>: its options are not readable and fill cannot set it. Focus it with browser_click, \
+then change it with browser_key ArrowDown / ArrowUp and check value= in the next list; or skip it and say so in done."
+                .into(),
+        ),
+        (_, "") => FillPlan::Text,
+        (_, k) => FillPlan::Skip(format!(
+            "Vio cannot type into <input type={k}> fields. Skip this field and say so in done, or ask_user for the value."
+        )),
+    }
 }
 
 /// The active tab as a snapshot. `window` = Vio's window when it is in front (pressKey focus).
@@ -587,6 +622,27 @@ mod tests {
                           { "tabId": "t-b", "title": "Wiki", "url": "https://pl.wikipedia.org/", "active": true }]);
         assert_eq!(active_tab(&real).unwrap().1, "t-b");
         assert!(tabs_text(&real).contains("tab_id=t-b \"Wiki\""), "{}", tabs_text(&real));
+    }
+
+    #[test]
+    fn non_text_fields_get_a_plan_instead_of_an_error() {
+        let els = json!([
+            { "ref": "a", "role": "combobox", "tag": "select", "type": "", "label": "Godzina", "value": "10:00" },
+            { "ref": "b", "role": "textbox", "tag": "input", "type": "time", "label": "Czas dostawy", "empty": true },
+            { "ref": "c", "role": "radio", "tag": "input", "type": "radio", "label": "Mały", "checked": false },
+            { "ref": "d", "role": "checkbox", "tag": "input", "type": "checkbox", "label": "Ser", "checked": true },
+            { "ref": "e", "role": "textbox", "tag": "input", "type": "text", "label": "Imię" }
+        ]);
+        let s = snapshot(&json!({ "title": "t", "url": "https://x.pl" }), &els, None);
+        let plan = |i: u32, text: &str| fill_plan(s.get(i).unwrap(), text);
+        assert!(matches!(plan(1, "12:00"), FillPlan::Skip(m) if m.contains("<select>")));
+        assert!(matches!(plan(2, "12:00"), FillPlan::Skip(m) if m.contains("type=time")));
+        assert_eq!(plan(3, "tak"), FillPlan::Click);
+        assert_eq!(plan(4, "tak"), FillPlan::AlreadySet);
+        assert_eq!(plan(4, "nie"), FillPlan::Click);
+        assert_eq!(plan(5, "Oskar"), FillPlan::Text);
+        let obs = s.observation();
+        assert!(obs.contains("type=select") && obs.contains("type=time"), "{obs}");
     }
 
     #[test]

@@ -168,7 +168,8 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     if has_youtube(lower) {
         let query = strip_youtube_and_search_triggers(lower);
         if query.is_empty() {
-            return None;
+            // „Weź mi przecież tego YouTube.” — nothing to search for: just open the site.
+            return pr("open_url", json!({ "url": "https://www.youtube.com" }), "youtube+open");
         }
         if is_youtube_play_intent(lower) {
             return pr("youtube_play", json!({ "query": query }), "youtube+play");
@@ -438,12 +439,18 @@ fn label_after(words: &[&str], folded: &[String], from: usize) -> String {
 }
 
 fn clean_tail(s: &str) -> String {
-    s.trim()
+    drop_leading_connector(s.trim()
         .trim_matches(|c: char| {
             matches!(c, '.' | ',' | '!' | '?' | ':' | ';' | '"' | '\u{201e}' | '\u{201d}')
         })
-        .trim()
-        .to_string()
+        .trim())
+}
+
+/// A leading connector from a chained utterance („… i jak ugotować spaghetti”).
+fn drop_leading_connector(t: &str) -> String {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let skip = words.iter().take_while(|w| matches!(fold_word(w).as_str(), "i" | "oraz" | "and" | "no")).count();
+    if skip == 0 || skip == words.len() { t.to_string() } else { words[skip..].join(" ") }
 }
 
 /// Original words from `from` on, skipping leading connectors (diacritics kept).
@@ -744,7 +751,28 @@ fn strip_youtube_and_search_triggers(lower: &str) -> String {
         .filter(|w| *w != "yt" && *w != "na" && *w != "on" && *w != "the" && *w != "a")
         .collect::<Vec<_>>()
         .join(" ");
-    cleanup_query(&s)
+    trim_query_fillers(&cleanup_query(&s))
+}
+
+/// Filler words and bare punctuation at the edges of a YouTube query („przeciez tego .” → „”).
+fn trim_query_fillers(q: &str) -> String {
+    const NOISE: &[&str] = &[
+        "przeciez", "tego", "tej", "ten", "te", "to", "mi", "mnie", "no", "wlasnie", "prostu", "jakis", "jakies", "teraz",
+        "juz", "tak", "nam", "sobie", "moze", "i", "oraz", "and", "just",
+    ];
+    let words: Vec<&str> = q
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let (mut a, mut b) = (0, words.len());
+    while a < b && NOISE.contains(&words[a]) {
+        a += 1;
+    }
+    while b > a && NOISE.contains(&words[b - 1]) {
+        b -= 1;
+    }
+    words[a..b].join(" ")
 }
 
 fn cleanup_query(s: &str) -> String {
@@ -972,6 +1000,23 @@ mod tests {
         let q = r.args["query"].as_str().unwrap();
         assert!(q.contains("lo-fi") || q.contains("lofi") || q.contains("nauki"));
         assert!(!q.contains("youtube"));
+    }
+
+    #[test]
+    fn youtube_filler_is_not_a_query() {
+        let r = match_command("Weź mi przecież tego YouTube.").unwrap();
+        assert_eq!((r.tool.as_str(), r.args["url"].as_str()), ("open_url", Some("https://www.youtube.com")));
+        let r = match_command("puść mi no tego queen na youtube").unwrap();
+        assert_eq!(r.args["query"], "queen");
+        assert_eq!(trim_query_fillers("przeciez tego ."), "");
+    }
+
+    #[test]
+    fn leading_connector_is_dropped_from_queries() {
+        assert_eq!(clean_tail("i jak ugotować spaghetti"), "jak ugotować spaghetti");
+        assert_eq!(clean_tail("i"), "i");
+        let r = match_command("wyszukaj i jak ugotować spaghetti").unwrap();
+        assert_eq!(r.args["query"], "jak ugotować spaghetti");
     }
 
     #[test]
