@@ -184,6 +184,12 @@ pub fn prefer_physical_pixels() {
 }
 
 /// Harness only: open an app / settings URI the way Explorer would.
+/// Harness only: native id of the window whose title contains `needle`.
+#[cfg(all(test, target_os = "windows"))]
+pub fn find_window_for_tests(needle: &str) -> Option<u64> {
+    windows_uia::find_window(needle)
+}
+
 #[cfg(all(test, target_os = "windows"))]
 pub fn open_path_for_tests(target: &str) -> Result<(), String> {
     windows::shell_open(target)

@@ -64,6 +64,21 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   the card; the talk key (`talk.rs` `Mode::Confirm`, bypasses `busy`) or a separate-mode hotkey records a spoken answer on the
   dictation session (`parse_answer`: „tak”/„nie”, a negative wins). Island side: `island/stage.ts` (`pickStage`, `holdsCard`;
   tested by `npm run test:ui`). Rust UI strings: `i18n.rs` (`ui_lang` from `appearance.uiLang`, `tr`).
+- `agent/computer/` – **Soul Agent** (voice computer control, design in `docs/agent.md`). `intent.rs`: `is_computer_task`
+  (UI verbs kliknij/przewiń/wpisz/zaznacz/wypełnij…, „przejdź do <in-app place>”, send verb + messenger, settings phrases)
+  runs in `text_command`/`run_agent_session`/Live paths **before** `local_dispatch` (so „kliknij Dalej” isn't media next);
+  Smart routing uses the stricter `is_explicit_ui_command`; `local_plan` = 0-call „kliknij X” (one exact match) / „przewiń w
+  dół”. `mod.rs::run_task(&dyn Host, task)`: snapshot → local plan or ONE Gemini call (`prompt.rs`, `mode: ANY`, single
+  turn, JPEG only on step 1 / vision / after a failure / `look`) → `safety::check_step` (Refuse > Confirm > Allow; never
+  bypassed by the model) → `exec.rs` (UIA pattern first, mouse fallback; typing: SetValue → clipboard paste → Unicode keys
+  for native apps, Unicode keys first for web — Win11 Notepad garbles fast Unicode packets) → settle (`ui_quick_state`) →
+  verify → one retry only when nothing changed and the step wasn't confirmed/risky. `killswitch.rs`: double Esc / corner
+  probe thread, talk key (`talk.rs` `on_down`), `agent_stop`. `host.rs` = Tauri `Host` (Island `island://agent`, confirm
+  card, `confirm::ask` question card, highlight window `agent-highlight`, capture exclusion); `harness.rs` = test `Host`.
+  Config: store key `computerAgent` (`agent_get_config`/`agent_save_config`, never touched by `save_app_settings`).
+  Platform: `platform/ui.rs` (snapshot model, `finalize`, observation text), `coords.rs`, `input.rs` (`execute` always
+  releases keys), `marks.rs` (set-of-marks JPEG), `windows_uia.rs` (UIA worker thread owns all COM objects),
+  `linux_atspi.rs` (AT-SPI + enigo, untested on a real desktop), Wayland refuses. Harness: `npm run test:agent [-- --real]`.
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
   a changed prompt reconnects it, so call `memory_changed` after edits). Refuses secrets; `extract_fact` = auto-remember.
@@ -211,9 +226,9 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
   thread) and `soul://voice-level` (TTS) are kept in refs and read inside rAF loops; stale values decay.
 - **Island stages** (`island/Island.tsx`): panel morphs width/height/radius with `anim.spring("morph")`; content is a
   keyed `AnimatePresence` crossfade sized to the target; the spirit glides via `layoutId`. Collapsed priority:
-  confirm card > text result card > live stage (or compact pill when quiet / per-mode expand is off) > dictation caption > music > idle.
+  confirm card / agent question > text result card > agent card (Stop) > live stage (or compact pill when quiet / per-mode expand is off) > dictation caption > music > idle.
   Cards with buttons (text result, toast with an action) set `holdCard` so hover does not turn them into peek.
-  Rust tags banners with `kind` (`island::set_activity`: dictation | command) and emits `island://tool` (tool chips)
+  Rust tags banners with `kind` (`island::set_activity`: dictation | command | agent) and emits `island://tool` (tool chips)
   and `island://caption` (cleaned dictation text). Confirm/Cancel for `close_app` is rendered on the Island.
 - **Accents / tokens** (`src/theme/tokens.ts`): `bg, bgElevated, border, textPrimary, textSecondary, accentDictation`
   (amber), `accentCommand` (sky), `accentAsk` (violet), `success, danger`, plus the user accent. Active mode accent >

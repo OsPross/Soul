@@ -116,15 +116,22 @@ Strategies (Windows), first → retry:
 |---|---|---|
 | click(id) | Invoke / Toggle / SelectionItem.Select / ExpandCollapse | SendInput click at rect centre |
 | click(id) without patterns | SendInput click | Invoke (if any) or focus + Enter |
-| type_text native (Win32/WPF/WinForms/XAML) | ValuePattern.SetValue (+ caret end) | focus + SendInput unicode |
-| type_text web/Electron (FrameworkId Chrome) | focus + SendInput unicode | ValuePattern.SetValue |
+| type_text, native single-line field | ValuePattern.SetValue | clipboard paste (then Unicode keys) |
+| type_text, other native (documents…) | clipboard paste, previous clipboard restored | Unicode keys |
+| type_text, web / Electron (FrameworkId Chrome) | Unicode keys (KEYEVENTF_UNICODE) | clipboard paste |
 | scroll | ScrollPattern on the element / nearest scrollable | mouse wheel at element/window centre |
 | right/double click, drag, x/y | SendInput | — |
 
-Typing: `input::unicode_units(text)` → UTF-16 code units, one `KEYEVENTF_UNICODE` down/up per
+Typing: `input::type_units(text)` → UTF-16 code units, one `KEYEVENTF_UNICODE` down/up per
 unit (surrogate pairs as two units), newline → Enter, tab → Tab. Never depends on the keyboard
 layout, so Polish AltGr layouts and ą/ć/ę/ł/ń/ó/ś/ź/ż work. Chunks of 16 units, abort checked
 between chunks. Modifier keys are always released (also on abort / error).
+
+Found while testing: Windows 11 Notepad's text input resolves queued Unicode key packets late —
+a burst arrives as N copies of the newest character („Zażółć źźźźźźźźź…”), with 15 ms gaps and
+split down/up events too. Chromium is flawless. So native apps get the text through the clipboard
+(`Platform::paste_text`, previous clipboard restored — equally layout-independent), web content
+keeps Unicode key events, and each is the other's fallback.
 
 After every action: settle (poll a cheap fingerprint — focused element, window title, element
 count + names hash, value of the target — every 120 ms until two equal reads or 2 s), re-perceive,
@@ -243,15 +250,22 @@ Verdicts are computed locally in `safety.rs` and combined with the model's `risk
 - Real tasks (opt-in, Windows): Notepad (type + save to a temp file), Settings (go to Sound),
   playground — `npm run test:agent -- --real`.
 
-## API calls per task (expected)
+## API calls per task (measured, `tests/agent/report.md`, 2026-10-16)
 
-| task | calls |
-|---|---|
-| „kliknij Zapisz” (unique match) | 0 (local plan) |
-| „przewiń w dół” | 0 (local plan) |
-| „wpisz w wyszukiwarkę X” | 1 (type_text with submit + final) |
-| Notepad: type + save as | 4–6 |
-| Settings → Sound → microphone | 4–7 |
-| Discord message | 4–6 + 1 confirmation |
+| task | model calls | screenshots | time |
+|---|---|---|---|
+| „kliknij Zapisz” (unique match) | 0 (local plan) | 0 | 0.4 s |
+| „wpisz Oskar w pole Imię” | 1 | 1 | 3 s |
+| „wpisz w wyszukiwarkę FiveM serwery” | 2 | 1 | 4 s |
+| „zaznacz newsletter” / „wybierz kolor Niebieski” | 1–2 | 1 | 3–8 s |
+| „przewiń listę serwerów i kliknij Serwer 42” | 8 | 1 | 14 s |
+| Notepad: type Polish text + save as a temp file | 4 | 1 | 7–8 s |
+| Settings: main page → System → Dźwięk | 2 | 1 | 4 s |
 
-Real numbers are in `tests/agent/report.md`.
+Playground average 2.3 calls / task, ~150–300 KB request per call with a screenshot, ~5–60 KB
+without. Each step is one `generateContent` request, so a free-tier key (≈ 15 requests/min on
+Flash-Lite) handles a typical task but not a burst of long ones.
+
+Known model behaviour: Flash-Lite sometimes flags harmless steps (saving a file) as `risky`; the
+safety layer honours the flag, so the user sees one extra confirmation. The prompt now states
+what is not risky, which reduced but did not eliminate it.

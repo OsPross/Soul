@@ -494,8 +494,28 @@ fn window_info(h: HWND) -> WindowInfo {
         pid,
         rect,
         monitor,
-        fullscreen: !monitor.is_empty() && rect.x <= monitor.x && rect.y <= monitor.y && rect.right() >= monitor.right() && rect.bottom() >= monitor.bottom(),
+        fullscreen: covers_monitor(&rect, &monitor) && !has_caption(h),
     }
+}
+
+fn covers_monitor(rect: &Rect, monitor: &Rect) -> bool {
+    !monitor.is_empty() && rect.x <= monitor.x && rect.y <= monitor.y && rect.right() >= monitor.right() && rect.bottom() >= monitor.bottom()
+}
+
+/// A maximized app window on a monitor without a taskbar also covers the whole monitor; games
+/// and F11 / presentation fullscreen have no caption.
+fn has_caption(h: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GWL_STYLE, WS_CAPTION};
+    // SAFETY: user32 validates the handle.
+    let style = unsafe { GetWindowLongW(h, GWL_STYLE) } as u32;
+    style & WS_CAPTION.0 == WS_CAPTION.0
+}
+
+/// Harness: the top-level window whose title contains `needle`.
+#[cfg(test)]
+pub(super) fn find_window(needle: &str) -> Option<u64> {
+    let needle = needle.to_lowercase();
+    z_order().into_iter().find(|h| is_app_window(*h) && window_title(*h).to_lowercase().contains(&needle)).map(|h| h.0 as usize as u64)
 }
 
 /// Popups of the same process shown over the window (menus, combo drop-downs, flyouts).
@@ -520,6 +540,18 @@ fn popups_of(main: HWND, pid: u32) -> Vec<HWND> {
 // ───────────────────────────── snapshot ─────────────────────────────
 
 pub(super) fn snapshot(opts: SnapshotOptions) -> Result<UiSnapshot, String> {
+    let first = snapshot_once(opts)?;
+    // Chromium / Electron build the page's accessibility tree only after the first UIA client
+    // asks: a browser window without its page document gets one more look.
+    let chromium = target_window(opts.skip_own_windows).is_some_and(|h| window_class(h).starts_with("Chrome_WidgetWin"));
+    if chromium && !first.elements.iter().any(|e| e.role == Role::Document) {
+        std::thread::sleep(Duration::from_millis(450));
+        return snapshot_once(opts);
+    }
+    Ok(first)
+}
+
+fn snapshot_once(opts: SnapshotOptions) -> Result<UiSnapshot, String> {
     let t0 = Instant::now();
     let target = target_window(opts.skip_own_windows).ok_or("No app window is in focus.")?;
     let info = window_info(target);

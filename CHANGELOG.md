@@ -8,6 +8,22 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Soul Agent — voice-driven computer control.** Say „kliknij Zapisz”, „przewiń w dół”, „wpisz w
+  wyszukiwarkę FiveM serwery”, „otwórz ustawienia dźwięku i ustaw mikrofon na Voicemeeter” or
+  „wyślij Silverowi na Discordzie: będę za 10 minut” and Soul works in the active window step by
+  step: it reads the window's accessibility tree (a screenshot only when needed), does one action,
+  checks it worked and continues — up to 20 steps / 90 s. The Island shows the current step, a
+  progress line and a **Zatrzymaj** button; at the end Soul says what it did. Trivial tasks
+  („kliknij Zapisz”, „przewiń w dół”) need no AI call at all.
+- Safety first: sending, buying, deleting, discarding unsaved work and changing system settings
+  always ask „Na pewno?” first (buttons or a spoken „tak” / „nie”), even if the AI didn't flag it.
+  Soul never types passwords or keys, never reads password fields, refuses password managers,
+  banking sites, Windows Security, terminals and the Run dialog (editable blocklist), pauses over
+  fullscreen games and treats text on screen as data, never as instructions. Stop anytime: Esc
+  twice, the talk key, the mouse in a screen corner, or **Zatrzymaj**.
+- Settings → Agent: on/off, max steps, highlight ring before clicks, confirmation level (risky
+  only / every action), model, blocklist editor and a log of recent steps.
+
 - Follow-ups: Soul remembers the last 3 commands for 90 s („mów ciszej” → „a teraz głośniej”,
   „otwórz Discord” → „i zamknij go”, a question → „a jutro?”). A small dot on the Island shows the
   context is active; „nowy temat” / „zapomnij” clears it. Settings → Głos i dusza → Kontekst rozmowy

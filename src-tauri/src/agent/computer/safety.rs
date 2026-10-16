@@ -63,42 +63,60 @@ const ALWAYS_BLOCKED_PROCESSES: &[&str] = &[
 /// Window titles of the Run dialog (pl / en).
 const RUN_DIALOG_TITLES: &[&str] = &["uruchamianie", "run"];
 
-/// Folded words on a target that mean "this sends / buys / deletes".
-const RISKY_WORDS: &[&str] = &[
-    // send / publish / submit
-    "wyslij", "wyslac", "send", "przeslij", "opublikuj", "publish", "post", "udostepnij", "share", "submit",
-    "zatwierdz", "potwierdz", "confirm", "tweet", "odpowiedz wszystkim",
-    // buy / pay
-    "kup", "kupuje", "zaplac", "platnosc", "zamow", "zamawiam", "buy", "pay", "checkout", "purchase", "order",
-    "subskrybuj", "subscribe",
-    // delete / discard
-    "usun", "usuwam", "delete", "remove", "odinstaluj", "uninstall", "wyczysc", "clear", "erase", "format",
-    "sformatuj", "reset", "zresetuj", "discard", "odrzuc", "trash", "kosz", "kosza", "wyrzuc",
-    // closing unsaved work / account
-    "nie zapisuj", "dont save", "don t save", "zamknij bez zapisywania", "wyloguj", "sign out", "log out",
-    "logout",
+/// Folded words on a target that mean "this sends / buys / deletes", with the reason shown on
+/// the confirmation card.
+const RISK_GROUPS: &[(&[&str], &str)] = &[
+    (
+        &[
+            "wyslij", "wyslac", "send", "przeslij", "opublikuj", "publish", "post", "udostepnij", "share", "submit",
+            "zatwierdz", "potwierdz", "confirm", "tweet", "odpowiedz wszystkim",
+        ],
+        "wysłanie / zatwierdzenie",
+    ),
+    (
+        &[
+            "kup", "kupuje", "zaplac", "platnosc", "zamow", "zamawiam", "buy", "pay", "checkout", "purchase", "order",
+            "subskrybuj", "subscribe",
+        ],
+        "płatność / zakup",
+    ),
+    (
+        &[
+            "usun", "usuwam", "delete", "remove", "odinstaluj", "uninstall", "wyczysc", "clear", "erase", "format",
+            "sformatuj", "reset", "zresetuj", "trash", "kosz", "kosza", "wyrzuc",
+        ],
+        "usunięcie",
+    ),
+    (
+        &[
+            "discard", "odrzuc", "nie zapisuj", "dont save", "don t save", "zamknij bez zapisywania", "wyloguj",
+            "sign out", "log out", "logout",
+        ],
+        "utrata zmian / wylogowanie",
+    ),
 ];
 
-/// Exact matches only for short ambiguous words ("post", "order", "clear" inside longer names
-/// like "Postęp" / "Ordered list" must not count): RISKY_WORDS entries ≤ 5 letters need a whole
-/// word match; longer ones may match as a prefix of a word („Wyślij” / „wysłanie”).
+/// The reason a target's name is risky, if it is. Short words (≤ 5 letters: "post", "order",
+/// "clear") need a whole-word match so "Postęp" / "Ordered list" don't count; longer ones may
+/// match as a word prefix („Wyślij” / „wysłanie”).
 fn has_risky_word(text: &str) -> Option<&'static str> {
     let words: Vec<String> = text.split(|c: char| !c.is_alphanumeric()).map(fold_word).filter(|w| !w.is_empty()).collect();
     if words.is_empty() {
         return None;
     }
     let joined = words.join(" ");
-    for w in RISKY_WORDS {
-        if w.contains(' ') {
-            if joined.contains(w) {
-                return Some(w);
+    for (group, reason) in RISK_GROUPS {
+        for w in group.iter() {
+            let hit = if w.contains(' ') {
+                joined.contains(w)
+            } else if w.len() <= 5 {
+                words.iter().any(|x| x == w)
+            } else {
+                words.iter().any(|x| x.starts_with(w))
+            };
+            if hit {
+                return Some(reason);
             }
-        } else if w.len() <= 5 {
-            if words.iter().any(|x| x == w) {
-                return Some(w);
-            }
-        } else if words.iter().any(|x| x.starts_with(w)) {
-            return Some(w);
         }
     }
     None
@@ -267,8 +285,8 @@ pub fn check_step(d: &Decision, s: &UiSnapshot, level: ConfirmLevel) -> Verdict 
     match &d.action {
         Action::Click { button, .. } if *button != crate::platform::input::MouseButton::Right => {
             if let Some(e) = target_el {
-                if let Some(word) = has_risky_word(&format!("{} {}", e.name, e.automation_id)) {
-                    reason = Some(format!("{} ({word})", clip(&e.display_name(), 40)));
+                if let Some(why) = has_risky_word(&format!("{} {}", e.name, e.automation_id)) {
+                    reason = Some(why.to_string());
                 } else if is_system_settings(w) && e.role.changes_state() {
                     reason = Some(format!("zmiana ustawienia: {}", clip(&e.display_name(), 40)));
                 } else if is_system_settings(w) && e.role == Role::ListItem && s.elements.iter().any(|x| x.role == Role::ComboBox && x.expanded == Some(true)) {

@@ -171,31 +171,60 @@ fn can_set_value(e: &UiElement, clear: bool) -> bool {
         && (clear || e.value.as_deref().is_none_or(|v| v.trim().is_empty()))
 }
 
+/// How text gets into a field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypeMode {
+    /// ValuePattern.SetValue (single-line native fields).
+    SetValue,
+    /// Clipboard + Ctrl+V, previous clipboard restored. Exact for native apps: Win11 Notepad's
+    /// text input resolves queued Unicode key packets late and repeats characters.
+    Paste,
+    /// One Unicode key event per UTF-16 unit (KEYEVENTF_UNICODE): web content / Electron.
+    Keys,
+}
+
+/// Strategy order for a target: native single-line field → SetValue, Paste, Keys;
+/// other native targets → Paste, Keys; web → Keys, Paste.
+fn type_modes(el: Option<&UiElement>, focused_web: bool, clear: bool) -> Vec<TypeMode> {
+    let web = el.map(|e| e.web).unwrap_or(focused_web);
+    let mut modes = Vec::with_capacity(3);
+    if el.is_some_and(|e| can_set_value(e, clear)) {
+        modes.push(TypeMode::SetValue);
+    }
+    if web {
+        modes.extend([TypeMode::Keys, TypeMode::Paste]);
+    } else {
+        modes.extend([TypeMode::Paste, TypeMode::Keys]);
+    }
+    modes
+}
+
 fn type_text(cx: &Cx, target: Option<&Target>, text: &str, clear: bool, submit: bool, strategy: Strategy) -> Result<Attempt, String> {
     let el = match target {
         Some(Target::Id(id)) => Some(cx.snap.get(*id).ok_or("The target field is gone.")?),
         _ => None,
     };
-    let set_value_ok = el.is_some_and(|e| can_set_value(e, clear));
-    let use_set_value = match strategy {
-        Strategy::Primary => set_value_ok,
-        Strategy::Alternate => false,
+    let modes = type_modes(el, cx.snap.focused().is_some_and(|f| f.web), clear);
+    let mode = match strategy {
+        Strategy::Primary => modes[0],
+        Strategy::Alternate => modes[1],
     };
+    let has_alternate = strategy == Strategy::Primary;
     if let Some(e) = el {
         flash(cx, e.rect);
     }
-    if use_set_value {
-        let e = el.expect("checked");
-        if element_op(cx, e.id, ElementOp::SetValue(text.to_string())).is_ok() {
-            if submit {
-                let _ = element_op(cx, e.id, ElementOp::Focus);
-                ensure_foreground(cx)?;
-                send_steps(cx, &input::plan_combo(&Combo { modifiers: vec![], key: Key::Enter }))?;
-            }
-            return Ok(Attempt { used: "set_value", has_alternate: true });
+    let enter = || input::plan_combo(&Combo { modifiers: vec![], key: Key::Enter });
+    if mode == TypeMode::SetValue {
+        let e = el.expect("SetValue implies an element");
+        element_op(cx, e.id, ElementOp::SetValue(text.to_string()))?;
+        if submit {
+            let _ = element_op(cx, e.id, ElementOp::Focus);
+            ensure_foreground(cx)?;
+            send_steps(cx, &enter())?;
         }
+        return Ok(Attempt { used: "set_value", has_alternate });
     }
-    // Keyboard: focus the field, optionally select all, type, optionally Enter.
+    // Keyboard / paste: focus the field, place the caret, insert, optionally Enter.
     ensure_foreground(cx)?;
     match (el, target) {
         (Some(e), _) => {
@@ -212,25 +241,33 @@ fn type_text(cx: &Cx, target: Option<&Target>, text: &str, clear: bool, submit: 
         _ => {}
     }
     killswitch::sleep(Duration::from_millis(60));
-    let mut steps = Vec::new();
+    let mut caret = Vec::new();
     if clear {
-        steps.extend(input::plan_combo(&Combo { modifiers: vec![Key::Ctrl], key: Key::Char('A') }));
-        steps.push(InputStep::Pause(40));
+        caret.extend(input::plan_combo(&Combo { modifiers: vec![Key::Ctrl], key: Key::Char('A') }));
+        caret.push(InputStep::Pause(40));
     } else if el.is_some_and(|e| e.role == Role::Document) {
         // Append at the end of a document, never in the middle of the user's text.
-        steps.extend(input::plan_combo(&Combo { modifiers: vec![Key::Ctrl], key: Key::End }));
+        caret.extend(input::plan_combo(&Combo { modifiers: vec![Key::Ctrl], key: Key::End }));
     } else if el.is_some_and(|e| e.value.as_deref().is_some_and(|v| !v.is_empty())) {
-        steps.extend(input::plan_combo(&Combo { modifiers: vec![], key: Key::End }));
+        caret.extend(input::plan_combo(&Combo { modifiers: vec![], key: Key::End }));
     }
-    steps.extend(input::plan_type(text));
+    send_steps(cx, &caret)?;
+    match mode {
+        TypeMode::Paste => {
+            if killswitch::aborted() {
+                return Err(input::ABORTED.into());
+            }
+            cx.platform.paste_text(text)?;
+        }
+        _ => send_steps(cx, &input::plan_type(text))?,
+    }
     if submit {
-        steps.push(InputStep::Pause(80));
-        steps.extend(input::plan_combo(&Combo { modifiers: vec![], key: Key::Enter }));
+        killswitch::sleep(Duration::from_millis(80));
+        send_steps(cx, &enter())?;
     }
-    send_steps(cx, &steps)?;
     Ok(Attempt {
-        used: "keyboard",
-        has_alternate: strategy == Strategy::Primary && !use_set_value && set_value_ok,
+        used: if mode == TypeMode::Paste { "paste" } else { "keys" },
+        has_alternate,
     })
 }
 
@@ -526,6 +563,20 @@ mod tests {
         assert_eq!(c.rect.x, 405);
         let far = mk(vec![UiElement::new(Role::Button, "Zapisz", Rect::new(10, 10, 80, 24))]);
         assert!(counterpart(old.get(1).unwrap(), &far).is_none());
+    }
+
+    #[test]
+    fn typing_strategy_order() {
+        let mut edit = UiElement::new(Role::Edit, "Nazwa pliku", Rect::new(0, 0, 10, 10));
+        edit.caps.set_value = true;
+        assert_eq!(type_modes(Some(&edit), false, true), [TypeMode::SetValue, TypeMode::Paste, TypeMode::Keys]);
+        let doc = UiElement::new(Role::Document, "Edytor", Rect::new(0, 0, 10, 10));
+        assert_eq!(type_modes(Some(&doc), false, false), [TypeMode::Paste, TypeMode::Keys]);
+        let mut web = UiElement::new(Role::Edit, "Szukaj", Rect::new(0, 0, 10, 10));
+        web.web = true;
+        web.caps.set_value = true;
+        assert_eq!(type_modes(Some(&web), false, true), [TypeMode::Keys, TypeMode::Paste]);
+        assert_eq!(type_modes(None, true, false), [TypeMode::Keys, TypeMode::Paste]);
     }
 
     #[test]

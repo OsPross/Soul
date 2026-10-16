@@ -32,8 +32,8 @@ const FALLBACK: &str = crate::config::DEFAULT_ASK_FALLBACK_MODEL;
 pub struct TestHost {
     platform: Arc<dyn Platform>,
     key: String,
-    /// Answer to confirmation cards.
-    accept: bool,
+    /// Answer to confirmation cards (per task).
+    accept: std::sync::atomic::AtomicBool,
     pub confirms: Mutex<Vec<String>>,
 }
 
@@ -42,7 +42,11 @@ impl Host for TestHost {
         Arc::clone(&self.platform)
     }
     fn config(&self) -> AgentConfig {
-        AgentConfig { highlight: false, ..Default::default() }
+        AgentConfig {
+            highlight: false,
+            debug_screenshots: std::env::var_os("SOUL_AGENT_DEBUG").is_some(),
+            ..Default::default()
+        }
     }
     fn language(&self) -> String {
         "pl".into()
@@ -61,9 +65,10 @@ impl Host for TestHost {
         eprintln!("[harness]   {:?} {}/{} {}", p.phase, p.step, p.max, p.text);
     }
     fn confirm(&self, question: &str) -> bool {
-        eprintln!("[harness]   CONFIRM? {question} → {}", if self.accept { "yes" } else { "no" });
+        let accept = self.accept.load(Ordering::SeqCst);
+        eprintln!("[harness]   CONFIRM? {question} → {}", if accept { "yes" } else { "no" });
         self.confirms.lock().push(question.to_string());
-        self.accept
+        accept
     }
     fn ask(&self, question: &str) -> Option<String> {
         eprintln!("[harness]   ASK: {question} → (no answer)");
@@ -75,7 +80,7 @@ impl Host for TestHost {
     }
     fn capture_exclusion(&self, _on: bool) {}
     fn debug_dir(&self) -> Option<PathBuf> {
-        None
+        Some(std::env::temp_dir().join("soul-agent-debug"))
     }
 }
 
@@ -154,6 +159,22 @@ impl Server {
     fn state(&self) -> Value {
         self.state.lock().clone()
     }
+}
+
+/// The browser may open the page behind another window: bring it to the front.
+fn focus_playground(host: &TestHost) {
+    #[cfg(windows)]
+    {
+        match crate::platform::find_window_for_tests("Soul Agent playground") {
+            Some(id) => {
+                let _ = host.platform.activate_window(id);
+                std::thread::sleep(Duration::from_millis(400));
+            }
+            None => eprintln!("[harness] playground window not found"),
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = host;
 }
 
 struct Row {
@@ -256,6 +277,7 @@ fn run_playground(host: &TestHost, only: Option<&str>) -> Vec<Row> {
     let url = format!("http://127.0.0.1:{}/playground.html?gen=1", server.port);
     host.platform.open_url(&url).expect("open playground");
     std::thread::sleep(Duration::from_secs(4));
+    focus_playground(host);
     let tasks: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(tests_dir().join("tasks.json")).unwrap()).unwrap();
     let mut rows = Vec::new();
     for t in &tasks {
@@ -266,9 +288,11 @@ fn run_playground(host: &TestHost, only: Option<&str>) -> Vec<Row> {
         if !server.reset() {
             eprintln!("[harness] page did not reload — is the playground tab in front?");
         }
+        focus_playground(host);
         let task = t["task"].as_str().unwrap();
         eprintln!("[harness] ── {id}: {task}");
         host.confirms.lock().clear();
+        host.accept.store(t["confirm"] == json!("accept"), Ordering::SeqCst);
         let out = run_task(host, task);
         std::thread::sleep(Duration::from_millis(900));
         let state = server.state();
@@ -288,37 +312,49 @@ fn run_playground(host: &TestHost, only: Option<&str>) -> Vec<Row> {
 fn run_real(host: &TestHost) -> Vec<Row> {
     use crate::platform::input::{self, Combo};
     let mut rows = Vec::new();
+    // The user asked for these: a confirmation card would be answered "yes".
+    host.accept.store(true, Ordering::SeqCst);
     let send = |c: &str| {
         let p = Arc::clone(&host.platform);
         let _ = input::execute(&input::plan_combo(&Combo::parse(c).unwrap()), &|| false, &mut |s| p.send_input_step(s));
     };
 
-    // 1. Notepad: a fresh tab (never the user's restored tabs), type Polish text, save to a temp file.
+    // 1. Notepad: launching it opens a fresh empty tab (never the user's restored tabs); type
+    //    Polish text and save it to a temp file. Refuses to run if the front tab isn't empty.
     let stamp = chrono::Local::now().format("%H%M%S");
     let path = std::env::temp_dir().join(format!("soul-agent-notepad-{stamp}.txt"));
     let text = "Zażółć gęślą jaźń — test Soul Agent";
     let _ = crate::platform::open_path_for_tests("notepad.exe");
     std::thread::sleep(Duration::from_millis(2500));
-    send("ctrl+n");
-    std::thread::sleep(Duration::from_millis(1200));
-    let task = format!("wpisz „{text}” i zapisz plik jako {}", path.display());
-    eprintln!("[harness] ── notepad: {task}");
-    host.confirms.lock().clear();
-    let out = run_task(host, &task);
-    std::thread::sleep(Duration::from_millis(800));
-    let saved = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut notes = Vec::new();
-    if !saved.contains(text) {
-        notes.push(format!("file {} contains {:?}", path.display(), crate::platform::ui::clip(&saved, 60)));
+    let fresh = host.platform.ui_snapshot(&Default::default()).is_ok_and(|s| {
+        s.window.process.eq_ignore_ascii_case("notepad.exe")
+            && s.elements.iter().any(|e| e.role == crate::platform::ui::Role::Document && e.value.as_deref().unwrap_or("").is_empty())
+    });
+    if fresh {
+        let task = format!("wpisz „{text}” i zapisz plik jako {}", path.display());
+        eprintln!("[harness] ── notepad: {task}");
+        host.confirms.lock().clear();
+        let out = run_task(host, &task);
+        std::thread::sleep(Duration::from_millis(800));
+        let saved = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut notes = Vec::new();
+        if !saved.contains(text) {
+            notes.push(format!("file {} contains {:?}", path.display(), crate::platform::ui::clip(&saved, 60)));
+        }
+        if let Err(e) = &out.result {
+            notes.push(format!("task error: {e}"));
+        }
+        let ok = notes.is_empty();
+        rows.push(Row { id: "notepad_type_save".into(), ok, outcome: out, notes });
+        if ok {
+            // Close only our tab: it is saved, so no prompt.
+            send("ctrl+w");
+            std::thread::sleep(Duration::from_millis(800));
+        }
+        let _ = std::fs::remove_file(&path);
+    } else {
+        eprintln!("[harness] notepad: the front tab is not a fresh empty one — skipped (never touching user text)");
     }
-    if let Err(e) = &out.result {
-        notes.push(format!("task error: {e}"));
-    }
-    rows.push(Row { id: "notepad_type_save".into(), ok: notes.is_empty(), outcome: out, notes });
-    let _ = std::fs::remove_file(&path);
-    // Close only the tab we created (it is saved, so no prompt).
-    send("ctrl+w");
-    std::thread::sleep(Duration::from_millis(800));
 
     // 2. Settings: start on the main page, navigate to Sound.
     let _ = crate::platform::open_path_for_tests("ms-settings:");
@@ -330,13 +366,17 @@ fn run_real(host: &TestHost) -> Vec<Row> {
     let snap = host.platform.ui_snapshot(&Default::default());
     let mut notes = Vec::new();
     let on_sound = snap.as_ref().is_ok_and(|s| {
-        s.window.process.eq_ignore_ascii_case("SystemSettings.exe")
-            && s.elements.iter().any(|e| {
-                let n = e.name.to_lowercase();
-                n.contains("urządzenie wyjściowe") || n.contains("output device") || n.contains("wybierz, gdzie odtwarzać") || n.contains("choose where to play")
-            })
+        let title = s.window.title.to_lowercase();
+        let names: Vec<String> = s.elements.iter().map(|e| e.name.to_lowercase()).collect();
+        (title == "ustawienia" || title == "settings")
+            && names.iter().any(|n| n == "dźwięk" || n == "sound")
+            && names.iter().any(|n| n == "wyjście" || n == "output")
     });
     if !on_sound {
+        // Element names stay in the console only: Settings shows the account name / e-mail.
+        if let Ok(s) = &snap {
+            eprintln!("[harness] settings sees: {:?}", s.elements.iter().take(25).map(|e| &e.name).collect::<Vec<_>>());
+        }
         notes.push("Settings is not on the Sound page".into());
     }
     if let Err(e) = &out.result {
@@ -359,7 +399,7 @@ fn computer_harness() {
     let host = TestHost {
         platform: crate::platform::create_platform(),
         key: key(),
-        accept: false,
+        accept: std::sync::atomic::AtomicBool::new(false),
         confirms: Mutex::new(Vec::new()),
     };
     let only = std::env::var("SOUL_AGENT_ONLY").ok();

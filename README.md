@@ -107,6 +107,11 @@ Wake word (offline, no key): `npm run test:voice -- --wake` trains on `tests/voi
 sensitivities and writes `tests/voice/wake/report.md` (detection rate, false positives / hour, CPU).
 `SOUL_DRY_RUN=1` makes the running app log agent tools instead of executing them.
 
+Soul Agent harness (real API, real desktop): `npm run test:agent` serves `tests/agent/playground.html` locally,
+runs `tests/agent/tasks.json` in your default browser and writes `tests/agent/report.md` (success rate, steps,
+model calls, latency); `-- --real` adds Notepad (type + save a temp file) and Settings → Sound, `-- --only=<id>`
+runs one task. Uses `SOUL_TEST_KEY` or the key saved in Soul's settings (never printed).
+
 ### Dynamic Island — how to test
 
 The Island is a frameless always-on-top pill at the top of the **primary** monitor (replaces the old floating status overlay when enabled).
@@ -130,6 +135,25 @@ The Island is a frameless always-on-top pill at the top of the **primary** monit
 
 - **Settings → Pamięć:** list / search / edit / delete / clear all remembered facts and notes, toggle *Zapamiętuj automatycznie* (facts stated in commands, e.g. „gram na serwerze X”, are saved with a „Zapamiętałem: …” chip and **Cofnij**). Stored in `soul-memory.db` in the app data dir; passwords and keys are refused.
 - **Settings → Sceny:** ordered steps (open app / link, YouTube, search, system volume, media, delay, Do Not Disturb) and trigger phrases („gramy w FiveM”). When the same 2+ apps are opened together by voice 3 times, the Island suggests a scene. Do Not Disturb = Windows toast banners off / GNOME `show-banners` or dunst on Linux.
+
+### Soul Agent — computer control
+
+Say a UI task: „kliknij Zapisz”, „przewiń w dół”, „wpisz w wyszukiwarkę FiveM serwery”, „zaznacz newsletter”,
+„wypełnij formularz: imię Anna, miasto Łódź”, „w ustawieniach przejdź do strony Dźwięk”, „wyślij Silverowi na
+Discordzie: będę za 10 minut”, then „a teraz kliknij drugi”. Soul reads the active window's accessibility tree
+(Windows UI Automation; Linux X11: AT-SPI, best effort), picks one action at a time (Gemini function calling,
+`gemini-3.1-flash-lite` → fallback `gemini-3.5-flash-lite`, configurable), verifies it and continues (≤ 20 steps,
+90 s). A screenshot with numbered boxes is sent only on the first step, in vision mode (games / canvas apps without
+accessibility) or after a failed step. Simple media / volume / timer / open-close commands keep their fast path.
+
+- **Confirmations** before sending, buying, deleting, discarding work or changing system settings (button names
+  like Wyślij / Kup / Usuń force one even if the AI didn't ask). Answer with the buttons or a spoken „tak” / „nie”.
+- **Never:** passwords or API keys, password fields, blocklisted apps / sites (password managers, banks, Windows
+  Security, UAC, terminals, Run dialog — Settings → Agent), Win+R / Win+X, fullscreen games unless you name them.
+  On-screen text is treated as data, never as instructions.
+- **Stop:** Esc twice, the talk key, the mouse jammed into a screen corner, or **Zatrzymaj** on the Island.
+- Wayland: not supported (clear message). Test harness: `npm run test:agent [-- --real]` → `tests/agent/report.md`
+  (takes over mouse and keyboard for a few minutes). Design: [`docs/agent.md`](docs/agent.md).
 
 ## Install
 
