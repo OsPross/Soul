@@ -1739,7 +1739,7 @@ fn run_tool(
         }
         "type_text" => {
             let text = arg_str(args, "text")?;
-            platform.paste_text(&text)?;
+            computer::vio::paste_text(platform.as_ref(), &text)?;
             Ok("Typed text".into())
         }
         "answer" => arg_str(args, "text"),

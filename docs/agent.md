@@ -270,11 +270,17 @@ instead of UI Automation + screenshots (faster, exact, no mouse).
 - **Tools (MODE browser):** `browser_list_tabs`, `browser_open {url | tab_id}` (openTab /
   activateTab — wakes sleeping tabs), `browser_navigate`, `browser_read_page` (getPage → READ, up to
   8000 chars), `browser_get_elements`, `browser_click {id}`, `browser_fill {id, text, submit}`,
-  `browser_key` (focuses Vio's window first), `browser_scroll up|down`, plus open_app / focus_app /
+  `browser_select {id, option}` (selectOption), `browser_fill_many {fields: [{id, text | option | checked}]}` (a whole
+  form in one step; each field is a note on failure, the rest still runs; the page is listed whole with `getElements
+  {all: true}`, rows below the fold carry `offscreen`), `browser_key` (focuses Vio's window first), `browser_scroll up|down`, plus open_app / focus_app /
   open_settings / wait / done / ask_user. Click / fill / key / scroll parse into the ordinary
   actions, so `local_plan`, `safety::check_step` (Wyślij / Kup / Usuń / **Zaloguj** confirm, password
   fields and secrets refused), the 20-step limit, history and the kill switch are unchanged. URLs:
   http(s) only (`vio::normalize_url`).
+- **Text without the clipboard:** dictation, the Live `type_text` tool and text actions (`popraw to`…) use
+  Vio's `insertText` / `getSelection` when the foreground window is Vio (`vio::paste_text`,
+  `vio::read_selection`); not connected, not in front, a non-editable field or > 10 000 characters fall back to the
+  clipboard path. A password field (`forbidden`) is reported, never bypassed.
 - **„forbidden”** (private / Tor / internal tabs, password fields) ends the task with a clear message
   — never worked around, never retried through the screen.
 - **Voice:** while Vio is connected `intent::is_browser_phrase` makes „otwórz w przeglądarce X”,

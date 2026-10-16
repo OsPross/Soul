@@ -17,14 +17,20 @@ look=true when the text list is not enough.\n";
 /// MODE browser: the Vio browser's automation API (`vio.rs`) instead of the screen.
 const BROWSER_OBSERVATION: &str = "OBSERVATION: you drive the user's Vio browser through its automation API (no mouse, \
 no screenshots). Every turn you get the active tab (title — URL) and its page elements as lines \
-`<id> <role> \"<label>\" [value=\"…\"] [password] [checked|unchecked] [empty]`; `empty` marks a form field without a value.\n\
+`<id> <role> \"<label>\" [value=\"…\"] [password] [checked|unchecked] [type=…] [options=\"a|b|c\"] [empty] [offscreen]`; \
+`empty` marks a form field without a value, `options` lists the choices of a <select>, `offscreen` marks an element \
+below the fold (usable without scrolling: the whole form is listed).\n\
 - Use the browser_* functions with ids from the CURRENT list: ids change after navigation, the list is fresh every \
 turn. browser_fill replaces a field's text; browser_open opens a URL in a new tab or switches to a tab (tab_id from \
 browser_list_tabs); browser_read_page returns the page text as READ in the next turn.\n\
 - To answer about the page (which fields are empty, what it says, a summary) read the list or call \
 browser_read_page, then answer with done(summary); a page summary may take up to three sentences.\n\
-- Fill only the values the TASK gives; never invent data for other fields. Lines with `type=select|time|date…` \
-are not text fields: browser_fill clicks radios / checkboxes for you; a failed fill is only a note, the task goes on.\n\
+- Fill only the values the TASK gives; never invent data for other fields. For SEVERAL fields use ONE \
+browser_fill_many call (fields: [{id, text}] for text / time HH:MM / date YYYY-MM-DD / number, {id, option} for a \
+<select>, {id, checked} for checkboxes and radio buttons); it reports what failed. A single <select>: browser_select \
+(an option from options=\"…\"). browser_fill also types time / date / number fields and clicks radios / checkboxes. \
+A failed field is only a note and the task goes on; the next list shows what is set. Never click a radio / checkbox \
+the list already shows as checked.\n\
 - Never call the same function with the same arguments twice in a row. To summarize or read the page, call \
 browser_read_page once on the active tab, then done(summary).\n\
 - If a call fails with 'forbidden' (private / Tor / internal tab, password field), never try another way.\n";
@@ -107,7 +113,27 @@ pub fn function_declarations(browser: bool) -> Value {
             decl("browser_read_page", "Read the current page's text (shown as READ in the next turn).", json!({}), &[], false),
             decl("browser_get_elements", "Refresh the element list (it is refreshed every turn anyway).", json!({}), &[], false),
             decl("browser_click", "Click an element (button, link, checkbox, tab).", id(), &["id"], true),
-            decl("browser_fill", "Replace a form field's text. Polish characters are fine.", fill, &["id", "text"], true),
+            decl("browser_fill", "Replace a form field's text. Polish characters are fine. Also time (HH:MM), date (YYYY-MM-DD), number.", fill, &["id", "text"], true),
+            decl(
+                "browser_select",
+                "Choose an option of a <select> by its label or value (see options= in the list).",
+                json!({ "id": { "type": "integer", "description": "element id of the select" }, "option": { "type": "string" } }),
+                &["id", "option"],
+                true,
+            ),
+            decl(
+                "browser_fill_many",
+                "Fill several form fields in one step. Each entry: id plus ONE of text (text / time / date / number field), \
+option (a <select> option) or checked (checkbox / radio). Reports which fields failed.",
+                json!({ "fields": { "type": "array", "items": { "type": "object", "properties": {
+                    "id": { "type": "integer", "description": "element id from the list" },
+                    "text": { "type": "string" },
+                    "option": { "type": "string" },
+                    "checked": { "type": "boolean" }
+                }, "required": ["id"] } } }),
+                &["fields"],
+                true,
+            ),
             decl(
                 "browser_key",
                 "Press a key in the page, e.g. \"Enter\", \"Tab\", \"Escape\", \"PageDown\", \"Ctrl+A\".",
@@ -327,7 +353,7 @@ mod tests {
         for browser in [false, true] {
             let decls = function_declarations(browser);
             let names: Vec<&str> = decls.as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
-            assert_eq!(names.len(), 15);
+            assert_eq!(names.len(), if browser { 17 } else { 15 });
             assert!(!names.iter().any(|n| n.contains("shell") || n.contains("command")));
             assert_eq!(browser, names.contains(&"browser_click"));
             // Every declared function is known to the parser.

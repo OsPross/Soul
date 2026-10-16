@@ -48,18 +48,16 @@ Diagnostics: `cargo test --manifest-path src-tauri/Cargo.toml --lib voice_e2e::v
   offline Windows Polish voices (Paulina / Adam), recorded in `generated/sources.json`; a later synth run upgrades
   those takes to Gemini. Non-Polish cases with an offline take are SKIPped (a Polish voice cannot speak Spanish).
 
-## Vio changes that would help (not done here — Vio is a separate project)
+## Vio automation features Soul relies on
 
-1. **Keyboard focus**: `fill` / `click` move DOM focus inside the page but not Chromium's keyboard focus into the
-   `<webview>`, so OS keystrokes (Soul's dictation paste, text actions, `Ctrl+A`) go to the address bar. Calling
-   `webview.focus()` / `webContents.focus()` in `fill` and `click` would fix it.
-2. **`<select>`, `type=time|date|number`**: `fill` refuses them („element is not a text field”); Soul has to click
-   and send ArrowDown, and cannot set a time at all. A `select {ref, label|value}` command and `fill` support for
-   time/date (set `value` + dispatch `input`/`change`) would cover forms.
-3. **Viewport-only `getElements`**: fields below the fold are invisible to the agent until it scrolls. An option
-   such as `getElements {all: true}` (with a `visible` flag) would avoid extra steps on long forms.
-4. **`pressKey` needs the Vio window focused** (documented) — with another app in front, select-by-keys fails.
-5. **`insertText {tabId, text}` into the focused element** would let Soul dictate into Vio without borrowing the
-   clipboard, and **`getSelection {tabId}`** would let text actions work without a simulated Ctrl+C.
-6. In dev, Vio runs as `electron.exe`, so window/process-name checks see „electron”; Soul matches Vio by the
+Vio now provides what the first suite runs asked for (see `Vio/docs/automation-api.md`):
+
+- `selectOption`, `fill` for time/date/number → `browser_select`, `browser_fill`, `browser_fill_many` (a long form in 1–2 model calls).
+- `getElements {all:true}` with `visible` → pages with form fields are listed whole (`offscreen` in the observation).
+- `insertText` / `getSelection` → dictation, `type_text` and text actions in Vio without the clipboard (trace op `vio_text`, expectation `vio_ops`).
+- Focus moves into the page on click/fill/select/insertText/pressKey, also when Vio is not in front.
+
+Still open:
+
+1. In dev, Vio runs as `electron.exe`, so window/process-name checks see „electron”; Soul matches Vio by the
    pid from `automation.json`. A real `Vio.exe` name (or the pid of the window's process in `listTabs`) is safer.

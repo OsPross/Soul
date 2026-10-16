@@ -1215,7 +1215,7 @@ fn paste_dictation(
         return Err("Transcription was empty.".into());
     }
     let t_paste = Instant::now();
-    platform.paste_text(&text)?;
+    agent::computer::vio::paste_text(platform.as_ref(), &text)?;
     eprintln!(
         "[soul][live] dictation total ms={} paste_ms={}",
         released.elapsed().as_millis(),

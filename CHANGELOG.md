@@ -16,6 +16,11 @@ changelog shown in Settings → O aplikacji / About.
   private / Tor / internal tabs and password fields are reported, never worked around. Settings →
   Agent shows „Przeglądarka Vio: połączona / niedostępna”.
 
+- **Forms in Vio, faster.** The agent fills a whole form in one or two model calls
+  (`browser_fill_many`), chooses `<select>` options (`browser_select`), sets time / date / number
+  fields, and sees fields below the fold without scrolling. Dictation and „popraw / przetłumacz to”
+  in Vio now insert text with Vio's own API instead of borrowing the clipboard.
+
 ### Fixed
 
 - Voice fixes found by the new end-to-end voice test suite:

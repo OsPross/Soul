@@ -177,6 +177,12 @@ pub struct UiElement {
     pub empty: bool,
     /// Web fields that are not plain text: `select`, `time`, `date`, `range`… (empty = text-like).
     pub kind: String,
+    /// `<select>` options `(value, label)` (Vio, max 30).
+    #[serde(skip)]
+    pub options: Vec<(String, String)>,
+    /// Outside the viewport (Vio `getElements {all:true}`): usable, but scrolled into view by the call.
+    #[serde(skip)]
+    pub offscreen: bool,
     /// Backend index into its element cache (order before `finalize`).
     #[serde(skip)]
     pub backend_index: usize,
@@ -202,6 +208,8 @@ impl UiElement {
             scroll_pct: None,
             empty: false,
             kind: String::new(),
+            options: Vec::new(),
+            offscreen: false,
             backend_index: 0,
         }
     }
@@ -507,8 +515,15 @@ impl UiSnapshot {
             if !e.kind.is_empty() {
                 out.push_str(&format!(" type={}", e.kind));
             }
+            if !e.options.is_empty() {
+                let labels: Vec<String> = e.options.iter().map(|(_, l)| sanitize(&clip(l, 40))).collect();
+                out.push_str(&format!(" options=\"{}\"", labels.join("|")));
+            }
             if e.empty {
                 out.push_str(" empty");
+            }
+            if e.offscreen {
+                out.push_str(" offscreen");
             }
             if e.caps.scroll {
                 match e.scroll_pct {

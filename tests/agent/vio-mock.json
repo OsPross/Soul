@@ -18,7 +18,10 @@
         { "ref": "e6", "role": "button", "tag": "button", "type": "submit", "label": "Wyślij", "name": "", "placeholder": "", "value": "", "empty": false },
         { "ref": "e7", "role": "button", "tag": "button", "type": "button", "label": "Dalej", "name": "", "placeholder": "", "value": "", "empty": false, "expireOnce": true },
         { "ref": "e8", "role": "textbox", "tag": "input", "type": "time", "label": "Godzina dostawy", "name": "godzina", "placeholder": "", "value": "", "empty": true },
-        { "ref": "e9", "role": "combobox", "tag": "select", "type": "", "label": "Rozmiar", "name": "rozmiar", "placeholder": "", "value": "M", "empty": false }
+        { "ref": "e9", "role": "combobox", "tag": "select", "type": "", "label": "Rozmiar", "name": "rozmiar", "placeholder": "", "value": "M", "empty": false,
+          "options": [{ "value": "s", "label": "S", "selected": false }, { "value": "m", "label": "M", "selected": true }, { "value": "l", "label": "L", "selected": false }, { "value": "xl", "label": "XL", "selected": false }] },
+        { "ref": "e10", "role": "textbox", "tag": "textarea", "type": "", "label": "Uwagi", "name": "uwagi", "placeholder": "", "value": "", "empty": true, "belowFold": true },
+        { "ref": "e11", "role": "checkbox", "tag": "input", "type": "checkbox", "label": "Regulamin", "name": "regulamin", "placeholder": "", "value": "", "empty": false, "checked": false, "belowFold": true }
       ]
     },
     {
@@ -86,15 +89,78 @@
       "expect": { "values": { "Hasło": "" } }
     },
     {
-      "id": "vio_non_text_fields_do_not_end_the_task",
+      "id": "vio_time_and_select_via_fill",
       "task": "wypełnij formularz: godzina 12:00, rozmiar L, miasto Łódź",
       "script": [
         ["browser_fill", { "id": 8, "text": "12:00" }],
-        ["browser_fill", { "id": 9, "text": "L" }],
+        ["browser_fill", { "id": 9, "text": "l" }],
+        ["browser_fill", { "id": 3, "text": "Łódź", "final": true }]
+      ],
+      "expect": { "values": { "Miasto": "Łódź", "Godzina dostawy": "12:00", "Rozmiar": "L" } },
+      "expect_prompt": ["type=time", "type=select options=\"S|M|L|XL\""]
+    },
+    {
+      "id": "vio_invalid_time_is_a_note",
+      "task": "ustaw godzinę dostawy na dwunastą i miasto Łódź",
+      "script": [
+        ["browser_fill", { "id": 8, "text": "dwunasta" }],
         ["browser_fill", { "id": 3, "text": "Łódź", "final": true }]
       ],
       "expect": { "values": { "Miasto": "Łódź", "Godzina dostawy": "" } },
-      "expect_prompt": ["NOT filled", "type=time", "type=select"]
+      "expect_prompt": ["NOT filled", "HH:MM"]
+    },
+    {
+      "id": "vio_select_option",
+      "task": "wybierz rozmiar XL",
+      "script": [["browser_select", { "id": 9, "option": "xl", "final": true }]],
+      "expect": { "values": { "Rozmiar": "XL" } }
+    },
+    {
+      "id": "vio_select_unknown_option_is_reported",
+      "task": "wybierz rozmiar XXL",
+      "script": [["browser_select", { "id": 9, "option": "XXL" }], ["done", { "summary": "Nie ma rozmiaru XXL." }]],
+      "expect": { "values": { "Rozmiar": "M" } },
+      "expect_prompt": ["no such option"]
+    },
+    {
+      "id": "vio_fill_many_whole_form",
+      "task": "wypełnij formularz: imię Anna, e-mail anna@example.com, miasto Łódź, godzina 18:30, rozmiar L, newsletter tak, uwagi dzwonić domofonem, zaakceptuj regulamin",
+      "script": [
+        ["browser_fill_many", { "fields": [
+          { "id": 1, "text": "Anna" },
+          { "id": 2, "text": "anna@example.com" },
+          { "id": 3, "text": "Łódź" },
+          { "id": 8, "text": "18:30" },
+          { "id": 9, "option": "L" },
+          { "id": 5, "checked": true },
+          { "id": 10, "text": "dzwonić domofonem" },
+          { "id": 11, "checked": true }
+        ], "final": true }]
+      ],
+      "expect": { "values": { "Imię": "Anna", "E-mail": "anna@example.com", "Miasto": "Łódź", "Godzina dostawy": "18:30", "Rozmiar": "L", "Uwagi": "dzwonić domofonem" },
+                  "checked": { "Newsletter": true, "Regulamin": true } },
+      "expect_prompt": ["\"Uwagi\" empty offscreen", "offscreen"]
+    },
+    {
+      "id": "vio_fill_many_reports_failures_and_goes_on",
+      "task": "wypełnij formularz: godzina dwunasta, rozmiar XXL, miasto Łódź",
+      "script": [
+        ["browser_fill_many", { "fields": [
+          { "id": 8, "text": "dwunasta" },
+          { "id": 9, "option": "XXL" },
+          { "id": 3, "text": "Łódź" }
+        ] }],
+        ["done", { "summary": "Wpisałem miasto; godzina i rozmiar się nie udały." }]
+      ],
+      "expect": { "values": { "Miasto": "Łódź", "Godzina dostawy": "", "Rozmiar": "M" } },
+      "expect_prompt": ["1/3 fields set", "NOT set", "FAILED"]
+    },
+    {
+      "id": "vio_fill_many_refuses_passwords",
+      "task": "wypełnij formularz: imię Anna i hasło tajne123",
+      "script": [["browser_fill_many", { "fields": [{ "id": 1, "text": "Anna" }, { "id": 4, "text": "tajne123" }] }]],
+      "expect_error": true,
+      "expect": { "values": { "Imię": "Oskar", "Hasło": "" } }
     },
     {
       "id": "vio_read_page_is_planned_locally",

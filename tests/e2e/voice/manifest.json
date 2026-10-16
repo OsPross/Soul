@@ -287,7 +287,10 @@
               "contains": "poprawioną wersję umowy"
             }
           }
-        }
+        },
+        "vio_ops": [
+          "insertText"
+        ]
       }
     },
     {
@@ -315,7 +318,10 @@
             }
           }
         },
-        "min_similarity": 0.3
+        "min_similarity": 0.3,
+        "vio_ops": [
+          "insertText"
+        ]
       }
     },
     {
@@ -340,7 +346,10 @@
               "contains": "jaźń"
             }
           }
-        }
+        },
+        "vio_ops": [
+          "insertText"
+        ]
       }
     },
     {
@@ -782,7 +791,7 @@
     },
     {
       "id": "form_fill_long",
-      "cap": "long dictated form fill (text, tel, e-mail, radio, checkboxes, select, time, textarea)",
+      "cap": "long dictated form fill in 1–2 agent calls (browser_fill_many: text, tel, e-mail, radio, checkboxes, select, time, textarea)",
       "text": "Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon sześćset siedemset osiemset, e-mail jan kropka kowalski małpa example kropka com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina dostawy osiemnasta trzydzieści, a w uwagach napisz: proszę dzwonić domofonem.",
       "setup": {
         "tabs": [
@@ -814,7 +823,8 @@
             "Szynka": false
           }
         },
-        "min_similarity": 0.6
+        "min_similarity": 0.6,
+        "max_agent_calls": 4
       },
       "transcript": "Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon 600 700 800, e-mail jan.kowalski@example.com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina dostawy 18:30, a w uwagach napisz: proszę dzwonić domofonem."
     },
@@ -866,7 +876,7 @@
     },
     {
       "id": "form_select_sauce",
-      "cap": "<select> via browser_key",
+      "cap": "<select> via browser_select (selectOption)",
       "text": "Wybierz sos ostry",
       "setup": {
         "tabs": [
@@ -880,7 +890,8 @@
           "fields": {
             "Sos": "Ostry"
           }
-        }
+        },
+        "max_agent_calls": 3
       }
     },
     {
@@ -987,7 +998,7 @@
     },
     {
       "id": "text_fix",
-      "cap": "text_action fix (selection in Vio)",
+      "cap": "text_action fix: getSelection + insertText in Vio, no clipboard",
       "text": "Popraw to",
       "setup": {
         "tabs": [
@@ -1012,12 +1023,16 @@
               "contains": "poszedłem"
             }
           }
-        }
+        },
+        "vio_ops": [
+          "getSelection",
+          "insertText"
+        ]
       }
     },
     {
       "id": "text_translate",
-      "cap": "text_action translate",
+      "cap": "text_action translate: getSelection + insertText in Vio",
       "text": "Przetłumacz to na angielski",
       "setup": {
         "tabs": [
@@ -1042,7 +1057,11 @@
               "contains": "thank"
             }
           }
-        }
+        },
+        "vio_ops": [
+          "getSelection",
+          "insertText"
+        ]
       }
     },
     {

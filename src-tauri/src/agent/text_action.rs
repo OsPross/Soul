@@ -6,6 +6,7 @@
 //! have no tool for it. Replace actions paste the result over the selection with a 10 s „Cofnij”
 //! on the Island; info actions show the result on the Island with „Kopiuj” / „Wklej”.
 
+use super::computer;
 use super::router::{fold_word, strip_filler};
 use crate::ai::gemini::reply_language_rule;
 use crate::config::load_settings;
@@ -250,8 +251,7 @@ fn run_inner(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction)
     // The app the user is working in (the Island takes focus when its buttons are clicked).
     let window = platform.active_window();
     let t0 = Instant::now();
-    let selection = platform
-        .read_selection()?
+    let selection = computer::vio::read_selection(platform.as_ref())?
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "Nic nie jest zaznaczone — zaznacz tekst i powtórz polecenie.".to_string())?;
     let chars = selection.chars().count();
@@ -282,7 +282,7 @@ fn run_inner(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction)
         if let Some(w) = window {
             let _ = platform.activate_window(w);
         }
-        platform.paste_text(&out)?;
+        computer::vio::paste_text(platform.as_ref(), &out)?;
         *LAST_UNDO.lock() = Some(Undo {
             id,
             window,
@@ -371,7 +371,7 @@ pub fn text_result_paste(app: AppHandle, id: u64) -> Result<(), String> {
             let _ = platform.activate_window(w);
             thread::sleep(Duration::from_millis(120));
         }
-        if let Err(e) = platform.paste_text(&text) {
+        if let Err(e) = computer::vio::paste_text(platform.as_ref(), &text) {
             crate::report_error(&app, e);
         }
     });

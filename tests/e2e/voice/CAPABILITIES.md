@@ -44,7 +44,7 @@ cover it. **Mode**: `real` = executed for real and verified on the result; `dry`
 | `create_scene` / `run_scene` (+ trigger phrase) | „uruchom scenę …” / trigger | real (scene of `open_url` + `web_search` steps only) | `scene_create`, `scene_trigger` |
 | `now_playing` | „co teraz gra” | real (reads SMTC) | `now_playing` |
 | `morning_briefing` | „dzień dobry” | real | `briefing` |
-| `text_action` (fix / translate / summarize / formal / casual / expand / explain) | „popraw to”, „przetłumacz to na angielski” | real (selection in a Vio textarea) | `text_fix`, `text_translate` |
+| `text_action` (fix / translate / summarize / formal / casual / expand / explain) | „popraw to”, „przetłumacz to na angielski” | real (selection in a Vio textarea: `getSelection` read, `insertText` write — no clipboard) | `text_fix`, `text_translate` |
 | `context_reset` | „nowy temat” | real | `context_reset` |
 | Chained commands (≤ 4, stop at first failure) | „X i Y”, „X, potem Y” | per tool | `chain_close_open`, `chain_search_note` |
 
@@ -58,8 +58,11 @@ cover it. **Mode**: `real` = executed for real and verified on the result; `dry`
 | `browser_read_page` | `getPage` (summaries, answers) | real | `summarize_article`, `read_question` |
 | `browser_get_elements` | `getElements` | real | all form cases |
 | `browser_click` | `click` (links, radios, checkboxes, submit) | real | `links_open_third`, `form_radio`, `form_submit_*` |
-| `browser_fill` | `fill` (text; radio/checkbox via click plan; select/time → skip note) | real | `form_*` |
-| `browser_key` | `pressKey` (select via ArrowDown, Enter) | real | `form_select_sauce` |
+| `browser_fill` | `fill` (text, time / date / number natively; radio/checkbox via click plan; a `<select>` is routed to `selectOption`) | real | `form_*` |
+| `browser_select` | `selectOption` (option by label or value, from the `options=` list) | real | `form_select_sauce` |
+| `browser_fill_many` | a whole form in one call: `{id, text \| option \| checked}` → `fill` / `selectOption` / `click`, per-field results; the page is listed whole (`getElements {all:true}`, `offscreen` marks the fold) | real | `form_fill_long` (≤ 4 agent calls) |
+| Dictation / `type_text` into a Vio field | `insertText` (clipboard fallback when Vio is not in front or the field is not editable) | real | `dictation_*` (`vio_ops`) |
+| `browser_key` | `pressKey` (Enter, Tab, Escape…) | real | `form_submit_*` |
 | `browser_scroll` | `scroll` | real | `scroll_down` |
 | `vio::browse` / `open_tab` | `open_url`, `web_search`, `youtube_*` land in Vio | real | search cases |
 | Vio chosen while another app is in front (`names_browser`) | — | real | `foreground_calc_fill` |

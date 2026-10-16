@@ -82,10 +82,16 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
             let t = tab_mut(p, &a["tabId"])?;
             allowed(t)?;
             loaded(t)?;
+            let all = a["all"] == json!(true);
             let els = t["elements"].as_array().cloned().unwrap_or_default();
             Ok(Value::Array(
                 els.into_iter()
+                    // `belowFold`: outside the viewport — only listed with `all: true`, flagged `visible: false`.
+                    .filter(|e| all || e["belowFold"] != json!(true))
                     .map(|mut e| {
+                        if all {
+                            e["visible"] = json!(e["belowFold"] != json!(true));
+                        }
                         e["ref"] = json!(format!("{}.{gen}", e["ref"].as_str().unwrap_or("")));
                         if e["type"] == json!("password") {
                             e["value"] = json!("");
@@ -95,7 +101,7 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
                     .collect(),
             ))
         }
-        "click" | "fill" | "pressKey" | "scroll" => {
+        "click" | "fill" | "selectOption" | "pressKey" | "scroll" => {
             let t = tab_mut(p, &a["tabId"])?;
             allowed(t)?;
             if matches!(cmd, "pressKey" | "scroll") {
@@ -112,13 +118,35 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
                 if e["type"] == json!("password") {
                     return Err("forbidden: password field".into());
                 }
-                if matches!(e["type"].as_str(), Some("time" | "date" | "radio" | "checkbox")) || e["tag"] == json!("select") {
+                if matches!(e["type"].as_str(), Some("radio" | "checkbox")) || e["tag"] == json!("select") {
                     return Err("element is not a text field".into());
                 }
                 let text = a["text"].as_str().unwrap_or("");
+                let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+                let valid = match e["type"].as_str() {
+                    Some("time") => text.split_once(':').is_some_and(|(h, m)| h.len() == 2 && m.len() == 2 && digits(h) && digits(m)),
+                    Some("date") => text.split('-').map(str::len).eq([4, 2, 2]) && digits(&text.replace('-', "")),
+                    _ => true,
+                };
+                if !valid && !text.is_empty() {
+                    return Err(format!("invalid {} value", e["type"].as_str().unwrap_or("")));
+                }
                 e["value"] = json!(text);
                 e["empty"] = json!(text.is_empty());
                 return Ok(Value::Null);
+            }
+            if cmd == "selectOption" {
+                if e["tag"] != json!("select") {
+                    return Err("element is not a select".into());
+                }
+                let want = a["label"].as_str().or(a["value"].as_str()).unwrap_or("").trim().to_lowercase();
+                let by_value = a["label"].is_null();
+                let opt = e["options"].as_array().and_then(|o| {
+                    o.iter().find(|o| o[if by_value { "value" } else { "label" }].as_str().is_some_and(|s| s.trim().to_lowercase() == want))
+                });
+                let Some(opt) = opt.cloned() else { return Err(format!("no such option: {want}")) };
+                e["value"] = opt["label"].clone();
+                return Ok(json!({ "value": opt["value"], "label": opt["label"] }));
             }
             if e["expireOnce"] == json!(true) {
                 // The page re-rendered right before the click.
@@ -381,6 +409,12 @@ fn check(case: &Value, page: &Page, out: &Outcome, confirms: &[String], prompts:
         let got = el(label).map(|e| e["value"].clone()).unwrap_or(Value::Null);
         if &got != want {
             bad.push(format!("{label}: want {want}, got {got}"));
+        }
+    }
+    for (label, want) in exp["checked"].as_object().into_iter().flatten() {
+        let got = el(label).map(|e| e["checked"].clone()).unwrap_or(Value::Null);
+        if &got != want {
+            bad.push(format!("{label}: want checked {want}, got {got}"));
         }
     }
     for url in exp["opened"].as_array().into_iter().flatten() {

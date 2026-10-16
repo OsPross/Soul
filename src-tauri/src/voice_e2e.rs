@@ -608,6 +608,18 @@ fn check(r: &Run, ev: &[Value], vio: Option<&VioState>, out: &Outcome) -> Vec<St
             None => "the computer agent did not run".into(),
         });
     }
+    if let Some(max) = x["max_agent_calls"].as_u64() {
+        let calls = agent.and_then(|a| a["model_calls"].as_u64()).unwrap_or(0);
+        if calls > max {
+            bad.push(format!("the agent needed {calls} model calls (max {max})"));
+        }
+    }
+    // Text went through Vio's own API (no clipboard): `vio_text` trace ops, e.g. ["getSelection", "insertText"].
+    for op in strs(&x["vio_ops"]) {
+        if !of("vio_text").any(|e| e["op"] == json!(op)) {
+            bad.push(format!("Vio {op} was not used"));
+        }
+    }
     if x["answer_nonempty"] == true && answer.trim().is_empty() {
         bad.push("no answer".into());
     }

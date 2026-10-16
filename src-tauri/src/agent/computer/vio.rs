@@ -14,6 +14,7 @@
 //! (private / Tor / internal tabs, password fields) end the task — never worked around.
 //! The token is never logged; `gemini::redact_secrets` scrubs it from error text.
 
+use super::action::FillValue;
 use crate::i18n::{tr, Lang};
 use crate::platform::ui::{clip, Rect, Role, Source, UiElement, UiSnapshot, WindowInfo, MAX_ELEMENTS};
 use futures_util::{SinkExt, StreamExt};
@@ -413,18 +414,28 @@ fn element(v: &Value) -> Option<UiElement> {
     e.value = Some(text(v, "value")).filter(|s| !s.is_empty() && !e.password);
     e.checked = v["checked"].as_bool();
     e.empty = v["empty"].as_bool() == Some(true);
+    // `visible` is only false for elements outside the viewport (`getElements {all:true}`).
+    e.offscreen = v["visible"].as_bool() == Some(false);
+    e.options = v["options"]
+        .as_array()
+        .map(|a| a.iter().map(|o| (text(o, "value"), text(o, "label"))).collect())
+        .unwrap_or_default();
     e.kind = match (tag.as_str(), ty.as_str()) {
         ("select", _) => "select".into(),
-        ("input", t @ ("time" | "date" | "datetime-local" | "month" | "week" | "color" | "range" | "file")) => t.into(),
+        ("input", t @ ("time" | "date" | "datetime-local" | "month" | "week" | "color" | "range" | "file" | "number")) => t.into(),
         _ => String::new(),
     };
     Some(e)
 }
 
-/// How `browser_fill` is carried out for an element (Vio's `fill` only types into text fields).
+/// How a form value is carried out for an element (Vio's `fill` types into text-like fields,
+/// `selectOption` picks `<select>` options, radios / checkboxes are clicked).
 #[derive(Debug, PartialEq)]
 pub enum FillPlan {
-    Text,
+    /// `fill` this text (also `time` / `date` / `datetime-local` / `number` / `range`).
+    Text(String),
+    /// `selectOption` with this option label or value.
+    Select(String),
     /// Radio / checkbox: one click.
     Click,
     /// Checkbox already in the wanted state.
@@ -433,21 +444,59 @@ pub enum FillPlan {
     Skip(String),
 }
 
-pub fn fill_plan(e: &UiElement, text: &str) -> FillPlan {
+fn wants_checked(text: &str) -> bool {
     let t = text.trim().to_lowercase();
-    let want = !matches!(t.as_str(), "nie" | "no" | "false" | "off" | "0" | "odznacz" | "wyłącz" | "wylacz" | "uncheck");
+    !matches!(t.as_str(), "nie" | "no" | "false" | "off" | "0" | "odznacz" | "wyłącz" | "wylacz" | "uncheck")
+}
+
+pub fn fill_plan(e: &UiElement, v: &FillValue) -> FillPlan {
+    let text = match v {
+        FillValue::Text(t) | FillValue::Option(t) => Some(t.as_str()),
+        FillValue::Checked(_) => None,
+    };
     match (e.role, e.kind.as_str()) {
-        (Role::Radio, _) => if e.checked == Some(true) { FillPlan::AlreadySet } else { FillPlan::Click },
-        (Role::CheckBox, _) => if e.checked == Some(want) { FillPlan::AlreadySet } else { FillPlan::Click },
-        (_, "select") => FillPlan::Skip(
-            "this is a <select>: its options are not readable and fill cannot set it. Focus it with browser_click, \
-then change it with browser_key ArrowDown / ArrowUp and check value= in the next list; or skip it and say so in done."
-                .into(),
-        ),
-        (_, "") => FillPlan::Text,
-        (_, k) => FillPlan::Skip(format!(
-            "Vio cannot type into <input type={k}> fields. Skip this field and say so in done, or ask_user for the value."
+        (Role::Radio | Role::CheckBox, _) => {
+            let want = match v {
+                FillValue::Checked(c) => *c,
+                FillValue::Text(t) | FillValue::Option(t) => wants_checked(t),
+            };
+            match (e.checked == Some(want), e.role, want) {
+                (true, ..) => FillPlan::AlreadySet,
+                (_, Role::Radio, false) => FillPlan::Skip("a radio button cannot be unchecked: choose another option of the group.".into()),
+                _ => FillPlan::Click,
+            }
+        }
+        (_, "select") => match text {
+            Some(t) => FillPlan::Select(t.to_string()),
+            None => FillPlan::Skip("this is a <select>: give the option (text or option), not checked.".into()),
+        },
+        (_, "month" | "week" | "color" | "file") => FillPlan::Skip(format!(
+            "Vio cannot type into <input type={}> fields. Skip this field and say so in done, or ask_user for the value.",
+            e.kind
         )),
+        _ => match text {
+            Some(t) => FillPlan::Text(t.to_string()),
+            None => FillPlan::Skip("this is not a checkbox or radio button: give text.".into()),
+        },
+    }
+}
+
+/// `selectOption` arguments (`label` or `value`) for what the model asked for: the exact label,
+/// else the exact value, else the only label containing it (spelling folded); else the text as label.
+pub fn select_args(e: &UiElement, want: &str) -> Value {
+    let fold = |s: &str| crate::agent::router::fold_word(s);
+    let w = fold(want);
+    let label = |l: &str| json!({ "label": l });
+    if let Some((_, l)) = e.options.iter().find(|(_, l)| fold(l) == w) {
+        return label(l);
+    }
+    if let Some((v, _)) = e.options.iter().find(|(v, _)| !v.is_empty() && fold(v) == w) {
+        return json!({ "value": v });
+    }
+    let part: Vec<&(String, String)> = e.options.iter().filter(|(_, l)| !w.is_empty() && fold(l).contains(&w)).collect();
+    match part.as_slice() {
+        [(_, l)] => label(l),
+        _ => label(want.trim()),
     }
 }
 
@@ -491,9 +540,34 @@ pub fn active_tab(tabs: &Value) -> Option<(Value, String)> {
     Some((tab.clone(), tab_key(&tab["tabId"])?))
 }
 
-/// `getElements` of a tab; a sleeping tab („tab not loaded (activateTab first)”) is activated and
-/// polled until its page is up (≤ 3 s).
+/// A form field (not a button or a link): the page is worth listing completely.
+fn has_form_fields(elements: &Value) -> bool {
+    elements.as_array().is_some_and(|a| {
+        a.iter().any(|v| {
+            matches!(
+                element(v).map(|e| e.role),
+                Some(Role::Edit | Role::ComboBox | Role::CheckBox | Role::Radio)
+            )
+        })
+    })
+}
+
+/// `getElements` of a tab. A page with form fields is listed whole (`all: true`, elements below
+/// the fold carry `visible: false`) so a long form is filled in one or two calls instead of a
+/// scroll per screen; any other page stays viewport-only (short prompts).
 pub fn elements_of(c: &Client, tab: &str) -> Result<Value, String> {
+    let viewport = elements_of_viewport(c, tab)?;
+    if has_form_fields(&viewport) {
+        if let Ok(all) = c.call("getElements", json!({ "tabId": tab, "all": true })) {
+            return Ok(all);
+        }
+    }
+    Ok(viewport)
+}
+
+/// A sleeping tab („tab not loaded (activateTab first)”) is activated and polled until its page
+/// is up (≤ 3 s).
+fn elements_of_viewport(c: &Client, tab: &str) -> Result<Value, String> {
     match c.call("getElements", json!({ "tabId": tab })) {
         Err(e) if e.contains("not loaded") || e.contains("not ready") => {
             c.call("activateTab", json!({ "tabId": tab }))?;
@@ -552,6 +626,71 @@ pub fn open_tab(c: &Client, platform: &dyn crate::platform::Platform, url: &str)
     }
     eprintln!("[soul][agent] open_url via vio");
     Ok(format!("Opened {u} in Vio"))
+}
+
+/// The active tab of Vio while Vio is connected and has the keyboard focus (where the user's
+/// cursor is). `None` = the text is not going into Vio.
+fn focused_tab(platform: &dyn crate::platform::Platform) -> Option<(Arc<Client>, String)> {
+    let c = global().filter(|c| c.status().state == State::Connected)?;
+    let w = platform.foreground_window()?;
+    if !((w.pid != 0 && w.pid == c.pid()) || is_vio_process(&w.process)) {
+        return None;
+    }
+    let (_, id) = active_tab(&c.call("listTabs", json!({})).ok()?)?;
+    Some((c, id))
+}
+
+/// Vio's `insertText` limit.
+const INSERT_MAX_CHARS: usize = 10_000;
+
+/// Dictation / text-action output into the focused Vio field — no clipboard involved. `None` =
+/// not applicable (Vio not connected or not in front, field not editable, too long): the caller
+/// pastes through the clipboard. A password field is never worked around.
+pub fn insert_text(platform: &dyn crate::platform::Platform, text: &str) -> Option<Result<(), String>> {
+    if text.chars().count() > INSERT_MAX_CHARS {
+        return None;
+    }
+    let (c, tab) = focused_tab(platform)?;
+    match c.call("insertText", json!({ "tabId": tab, "text": text })) {
+        Ok(_) => {
+            eprintln!("[soul][agent] text inserted via vio chars={}", text.chars().count());
+            crate::e2e::trace("vio_text", json!({ "op": "insertText", "chars": text.chars().count() }));
+            Some(Ok(()))
+        }
+        Err(e) if is_forbidden(&e) => Some(Err(forbidden_message(Lang::En, &e))),
+        Err(e) => {
+            eprintln!("[soul][agent] vio insertText failed: {e} — clipboard");
+            None
+        }
+    }
+}
+
+/// The selection of the focused Vio field / page (`getSelection`). `None` = not applicable, the
+/// caller reads it through the clipboard. `Some(Ok(None))` = nothing selected.
+pub fn selection(platform: &dyn crate::platform::Platform) -> Option<Result<Option<String>, String>> {
+    let (c, tab) = focused_tab(platform)?;
+    match c.call("getSelection", json!({ "tabId": tab })) {
+        Ok(v) => {
+            let t = text(&v, "text");
+            crate::e2e::trace("vio_text", json!({ "op": "getSelection", "chars": t.chars().count() }));
+            Some(Ok(Some(t).filter(|t| !t.is_empty())))
+        }
+        Err(e) if is_forbidden(&e) => Some(Err(forbidden_message(Lang::En, &e))),
+        Err(e) => {
+            eprintln!("[soul][agent] vio getSelection failed: {e} — clipboard");
+            None
+        }
+    }
+}
+
+/// Type text into the focused field: Vio's `insertText` when the field is in Vio, else the clipboard paste.
+pub fn paste_text(platform: &dyn crate::platform::Platform, text: &str) -> Result<(), String> {
+    insert_text(platform, text).unwrap_or_else(|| platform.paste_text(text))
+}
+
+/// The current selection: Vio's `getSelection` when the focus is in Vio, else Ctrl+C.
+pub fn read_selection(platform: &dyn crate::platform::Platform) -> Result<Option<String>, String> {
+    selection(platform).unwrap_or_else(|| platform.read_selection())
 }
 
 /// `listTabs` for the model (READ).
@@ -625,24 +764,64 @@ mod tests {
     }
 
     #[test]
-    fn non_text_fields_get_a_plan_instead_of_an_error() {
+    fn form_values_get_a_plan_per_field_type() {
         let els = json!([
-            { "ref": "a", "role": "combobox", "tag": "select", "type": "", "label": "Godzina", "value": "10:00" },
+            { "ref": "a", "role": "combobox", "tag": "select", "type": "", "label": "Sos", "value": "— wybierz —",
+              "options": [{ "value": "", "label": "— wybierz —", "selected": true }, { "value": "pomidorowy", "label": "Pomidorowy" },
+                          { "value": "ostry", "label": "Ostry" }, { "value": "czosnkowy", "label": "Czosnkowy" }], "visible": true },
             { "ref": "b", "role": "textbox", "tag": "input", "type": "time", "label": "Czas dostawy", "empty": true },
             { "ref": "c", "role": "radio", "tag": "input", "type": "radio", "label": "Mały", "checked": false },
             { "ref": "d", "role": "checkbox", "tag": "input", "type": "checkbox", "label": "Ser", "checked": true },
-            { "ref": "e", "role": "textbox", "tag": "input", "type": "text", "label": "Imię" }
+            { "ref": "e", "role": "textbox", "tag": "input", "type": "text", "label": "Imię", "visible": false },
+            { "ref": "f", "role": "textbox", "tag": "input", "type": "color", "label": "Kolor" },
+            { "ref": "g", "role": "radio", "tag": "input", "type": "radio", "label": "Duży", "checked": true }
         ]);
         let s = snapshot(&json!({ "title": "t", "url": "https://x.pl" }), &els, None);
-        let plan = |i: u32, text: &str| fill_plan(s.get(i).unwrap(), text);
-        assert!(matches!(plan(1, "12:00"), FillPlan::Skip(m) if m.contains("<select>")));
-        assert!(matches!(plan(2, "12:00"), FillPlan::Skip(m) if m.contains("type=time")));
-        assert_eq!(plan(3, "tak"), FillPlan::Click);
-        assert_eq!(plan(4, "tak"), FillPlan::AlreadySet);
-        assert_eq!(plan(4, "nie"), FillPlan::Click);
-        assert_eq!(plan(5, "Oskar"), FillPlan::Text);
+        let text = |t: &str| FillValue::Text(t.into());
+        let plan = |i: u32, v: &FillValue| fill_plan(s.get(i).unwrap(), v);
+        assert_eq!(plan(1, &text("ostry")), FillPlan::Select("ostry".into()));
+        assert_eq!(plan(1, &FillValue::Option("Ostry".into())), FillPlan::Select("Ostry".into()));
+        assert!(matches!(plan(1, &FillValue::Checked(true)), FillPlan::Skip(m) if m.contains("<select>")));
+        assert_eq!(plan(2, &text("18:30")), FillPlan::Text("18:30".into()), "time is filled natively now");
+        assert_eq!(plan(3, &text("tak")), FillPlan::Click);
+        assert_eq!(plan(3, &FillValue::Checked(true)), FillPlan::Click);
+        assert_eq!(plan(3, &FillValue::Checked(false)), FillPlan::AlreadySet);
+        assert_eq!(plan(4, &text("tak")), FillPlan::AlreadySet);
+        assert_eq!(plan(4, &text("nie")), FillPlan::Click);
+        assert_eq!(plan(4, &FillValue::Checked(false)), FillPlan::Click);
+        assert_eq!(plan(5, &text("Oskar")), FillPlan::Text("Oskar".into()));
+        assert!(matches!(plan(5, &FillValue::Checked(true)), FillPlan::Skip(_)));
+        assert!(matches!(plan(6, &text("#fff")), FillPlan::Skip(m) if m.contains("type=color")));
+        assert!(matches!(plan(7, &FillValue::Checked(false)), FillPlan::Skip(m) if m.contains("radio")));
+        // Observation: select options, current value, rows below the fold.
         let obs = s.observation();
-        assert!(obs.contains("type=select") && obs.contains("type=time"), "{obs}");
+        assert!(obs.contains("type=select options=\"— wybierz —|Pomidorowy|Ostry|Czosnkowy\""), "{obs}");
+        assert!(obs.lines().nth(4).unwrap().ends_with(" offscreen"), "{obs}");
+        assert!(!obs.lines().next().unwrap().contains("offscreen"), "{obs}");
+        assert!(obs.contains("type=time"), "{obs}");
+    }
+
+    #[test]
+    fn select_args_resolve_label_value_and_fragments() {
+        let els = json!([{ "ref": "a", "role": "combobox", "tag": "select", "label": "Sos",
+            "options": [{ "value": "", "label": "— wybierz —" }, { "value": "pomidorowy", "label": "Pomidorowy" },
+                        { "value": "ostry", "label": "Ostry" }, { "value": "cz", "label": "Sos czosnkowy łagodny" }] }]);
+        let s = snapshot(&json!({ "title": "t", "url": "https://x.pl" }), &els, None);
+        let e = s.get(1).unwrap();
+        assert_eq!(select_args(e, "ostry"), json!({ "label": "Ostry" }));
+        assert_eq!(select_args(e, " POMIDOROWY "), json!({ "label": "Pomidorowy" }));
+        assert_eq!(select_args(e, "cz"), json!({ "value": "cz" }));
+        assert_eq!(select_args(e, "czosnkowy"), json!({ "label": "Sos czosnkowy łagodny" }));
+        assert_eq!(select_args(e, "o"), json!({ "label": "o" }), "ambiguous fragment: Vio decides");
+        assert_eq!(select_args(e, "Nieistniejący"), json!({ "label": "Nieistniejący" }));
+    }
+
+    #[test]
+    fn long_pages_with_forms_are_listed_whole() {
+        let form = json!([{ "ref": "1", "role": "link", "tag": "a", "label": "x" }, { "ref": "2", "role": "textbox", "tag": "input", "type": "text", "label": "Imię" }]);
+        assert!(has_form_fields(&form));
+        assert!(!has_form_fields(&json!([{ "ref": "1", "role": "link", "tag": "a", "label": "x" }, { "ref": "2", "role": "button", "tag": "button", "label": "Szukaj" }])));
+        assert!(!has_form_fields(&json!([])));
     }
 
     #[test]

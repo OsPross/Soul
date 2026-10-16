@@ -14,6 +14,23 @@ pub enum Target {
     Point { x: f64, y: f64 },
 }
 
+/// What goes into one Vio form field.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FillValue {
+    /// Text; for a radio / checkbox „tak” / „nie”, for a `<select>` the option label.
+    Text(String),
+    /// An option of a `<select>` (label or value).
+    Option(String),
+    /// Checkbox / radio state.
+    Checked(bool),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillItem {
+    pub id: u32,
+    pub value: FillValue,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Click { target: Target, button: MouseButton, count: u8 },
@@ -31,7 +48,14 @@ pub enum Action {
     AskUser(String),
     /// Vio browser API calls without a UI counterpart (`vio.rs`).
     Browser(BrowserOp),
+    /// Vio: choose an option of a `<select>`.
+    Select { target: Target, option: String },
+    /// Vio: many form fields in one step (`browser_fill_many`).
+    FillMany(Vec<FillItem>),
 }
+
+/// A whole form in one call: more than this is a sign the model is looping.
+pub const MAX_FILL_ITEMS: usize = 40;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrowserOp {
@@ -75,6 +99,7 @@ impl Action {
             Self::Click { target: Target::Id(id), .. }
             | Self::TypeText { target: Some(Target::Id(id)), .. }
             | Self::Scroll { target: Some(Target::Id(id)), .. }
+            | Self::Select { target: Target::Id(id), .. }
             | Self::Drag { from: Target::Id(id), .. } => Some(*id),
             Self::ReadText(id) => Some(*id),
             _ => None,
@@ -87,6 +112,8 @@ impl Action {
             Self::TypeText { target: Some(t), .. } | Self::Scroll { target: Some(t), .. } => vec![*t],
             Self::Drag { from, to } => vec![*from, *to],
             Self::ReadText(id) => vec![Target::Id(*id)],
+            Self::Select { target, .. } => vec![*target],
+            Self::FillMany(items) => items.iter().map(|i| Target::Id(i.id)).collect(),
             _ => Vec::new(),
         }
     }
@@ -182,6 +209,17 @@ pub fn parse(name: &str, args: &Value) -> Result<Decision, String> {
             }
             Action::TypeText { target: Some(Target::Id(id)), text, clear: true, submit: arg_bool(args, "submit") }
         }
+        "browser_select" => Action::Select {
+            target: Target::Id(arg_num(args, "id").filter(|n| *n >= 1.0).ok_or("browser_select: missing 'id'")?.round() as u32),
+            option: need("option")?,
+        },
+        "browser_fill_many" => {
+            let list = args.get("fields").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or("browser_fill_many: missing 'fields'")?;
+            if list.len() > MAX_FILL_ITEMS {
+                return Err(format!("browser_fill_many: at most {MAX_FILL_ITEMS} fields per call"));
+            }
+            Action::FillMany(list.iter().map(fill_item).collect::<Result<Vec<_>, _>>()?)
+        }
         "browser_key" => Action::KeyCombo(Combo::parse(&need("key")?)?),
         "browser_scroll" => Action::Scroll {
             target: None,
@@ -209,6 +247,25 @@ pub fn parse(name: &str, args: &Value) -> Result<Decision, String> {
         look: arg_bool(args, "look"),
         name: name.to_string(),
     })
+}
+
+/// One `browser_fill_many` entry: `{id, text | option | checked}`.
+fn fill_item(v: &Value) -> Result<FillItem, String> {
+    let id = arg_num(v, "id").filter(|n| *n >= 1.0).ok_or("browser_fill_many: every field needs an 'id'")?.round() as u32;
+    let text = |k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let value = if let Some(o) = text("option") {
+        FillValue::Option(o.to_string())
+    } else if v.get("checked").is_some_and(|c| !c.is_null()) {
+        FillValue::Checked(arg_bool(v, "checked"))
+    } else if let Some(t) = v.get("text").and_then(Value::as_str) {
+        FillValue::Text(t.to_string())
+    } else {
+        return Err(format!("browser_fill_many: field #{id} needs text, option or checked"));
+    };
+    if matches!(&value, FillValue::Text(t) | FillValue::Option(t) if t.chars().count() > 2000) {
+        return Err(format!("browser_fill_many: field #{id} is longer than 2000 characters"));
+    }
+    Ok(FillItem { id, value })
 }
 
 /// „„Zapisz””, or „punkt 412,88” for coordinates.
@@ -266,6 +323,14 @@ pub fn describe(a: &Action, snap: &UiSnapshot, lang: Lang) -> String {
         }
         Action::Done(_) => tr(lang, "Gotowe", "Done").to_string(),
         Action::AskUser(q) => clip(q, 80),
+        Action::Select { target, option } => {
+            let o = clip(option, 30);
+            tr(lang, format!("Wybieram \u{201e}{o}\u{201d} w {}…", t(target)), format!("Choosing \u{201e}{o}\u{201d} in {}…", t(target)))
+        }
+        Action::FillMany(items) => {
+            let n = items.len();
+            tr(lang, format!("Wypełniam formularz ({n} pól)…"), format!("Filling the form ({n} fields)…"))
+        }
         Action::Browser(op) => match op {
             BrowserOp::ListTabs => tr(lang, "Sprawdzam karty…", "Checking the tabs…").to_string(),
             BrowserOp::Open { url: Some(u), .. } | BrowserOp::Navigate(u) => {
@@ -312,6 +377,20 @@ pub fn history_line(d: &Decision, snap: &UiSnapshot) -> String {
         Action::ReadText(id) => format!("read_text {}", t(&Target::Id(*id))),
         Action::Done(s) => format!("done \"{}\"", clip(s, 80)),
         Action::AskUser(q) => format!("ask_user \"{}\"", clip(q, 80)),
+        Action::Select { target, option } => format!("browser_select {} \"{}\"", t(target), clip(option, 60)),
+        Action::FillMany(items) => {
+            let parts: Vec<String> = items
+                .iter()
+                .map(|i| {
+                    let v = match &i.value {
+                        FillValue::Text(x) | FillValue::Option(x) => format!("\"{}\"", clip(x, 30)),
+                        FillValue::Checked(c) => c.to_string(),
+                    };
+                    format!("{}={v}", t(&Target::Id(i.id)))
+                })
+                .collect();
+            format!("browser_fill_many {}", clip(&parts.join(", "), 300))
+        }
         Action::Browser(op) => match op {
             BrowserOp::ListTabs => "browser_list_tabs".into(),
             BrowserOp::Open { url, tab } => format!(
@@ -394,6 +473,40 @@ mod tests {
         assert!(parse("browser_click", &json!({})).is_err());
         assert!(!parse("browser_read_page", &json!({})).unwrap().action.acts());
         assert!(parse("browser_navigate", &json!({ "url": "https://example.com" })).unwrap().action.acts());
+    }
+
+    #[test]
+    fn parses_select_and_fill_many() {
+        let d = parse("browser_select", &json!({ "id": 9, "option": "Ostry" })).unwrap();
+        assert_eq!(d.action, Action::Select { target: Target::Id(9), option: "Ostry".into() });
+        assert_eq!(d.action.target_id(), Some(9));
+        assert!(parse("browser_select", &json!({ "id": 9 })).is_err());
+        let d = parse(
+            "browser_fill_many",
+            &json!({ "fields": [
+                { "id": 1, "text": "Jan Kowalski" },
+                { "id": 4, "text": "18:30" },
+                { "id": 7, "option": "Czosnkowy" },
+                { "id": 8, "checked": true },
+                { "id": 9, "checked": "false" },
+                { "id": 10, "text": "" }
+            ] }),
+        )
+        .unwrap();
+        let Action::FillMany(items) = &d.action else { panic!("{:?}", d.action) };
+        assert_eq!(items[0], FillItem { id: 1, value: FillValue::Text("Jan Kowalski".into()) });
+        assert_eq!(items[2].value, FillValue::Option("Czosnkowy".into()));
+        assert_eq!(items[3].value, FillValue::Checked(true));
+        assert_eq!(items[4].value, FillValue::Checked(false));
+        assert_eq!(items[5].value, FillValue::Text(String::new()), "an empty text clears the field");
+        assert_eq!(d.action.targets().len(), 6);
+        assert!(d.action.acts());
+        assert!(parse("browser_fill_many", &json!({})).is_err());
+        assert!(parse("browser_fill_many", &json!({ "fields": [] })).is_err());
+        assert!(parse("browser_fill_many", &json!({ "fields": [{ "id": 2 }] })).is_err());
+        assert!(parse("browser_fill_many", &json!({ "fields": [{ "text": "x" }] })).is_err());
+        let many: Vec<Value> = (1..=MAX_FILL_ITEMS as u32 + 1).map(|i| json!({ "id": i, "text": "x" })).collect();
+        assert!(parse("browser_fill_many", &json!({ "fields": many })).is_err());
     }
 
     #[test]

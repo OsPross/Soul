@@ -3,7 +3,7 @@
 //! verifies the expected change and retries once with the other strategy when nothing happened.
 //! A confirmed or risky action is never retried automatically (no double „Wyślij”).
 
-use super::action::{Action, BrowserOp, Decision, Target};
+use super::action::{Action, BrowserOp, Decision, FillItem, FillValue, Target};
 use super::{killswitch, vio, Host};
 use crate::i18n::{tr, Lang};
 use crate::platform::coords::{clamp_off_corners, norm_to_screen, Monitor, Point};
@@ -349,8 +349,61 @@ fn attempt(cx: &Cx, a: &Action, strategy: Strategy) -> Result<Attempt, String> {
             .unwrap_or_else(|| cx.platform.open_url(url))
             .map(|_| Attempt { used: "open_url", has_alternate: false }),
         Action::Wait(_) | Action::ReadText(_) | Action::Done(_) | Action::AskUser(_) => Ok(Attempt { used: "none", has_alternate: false }),
-        Action::Browser(_) => Err("The Vio browser is not connected.".into()),
+        Action::Browser(_) | Action::Select { .. } | Action::FillMany(_) => Err("The Vio browser is not connected.".into()),
     }
+}
+
+/// One form field through Vio. `Ok(Some(why))` = not done, a note for the model (wrong field type,
+/// a value Vio cannot parse); `Err` = the call failed.
+fn fill_field(cx: &Cx, c: &vio::Client, tab: &str, id: u32, value: &FillValue) -> Result<Option<String>, String> {
+    let e = cx.snap.get(id).ok_or("No such element.")?;
+    let r = &e.automation_id;
+    match vio::fill_plan(e, value) {
+        vio::FillPlan::Skip(why) => return Ok(Some(why)),
+        vio::FillPlan::AlreadySet => {}
+        vio::FillPlan::Click => {
+            c.call("click", json!({ "tabId": tab, "ref": r }))?;
+        }
+        vio::FillPlan::Select(want) => {
+            let mut args = vio::select_args(e, &want);
+            args["tabId"] = json!(tab);
+            args["ref"] = json!(r);
+            c.call("selectOption", args)?;
+        }
+        vio::FillPlan::Text(text) => {
+            if let Err(err) = c.call("fill", json!({ "tabId": tab, "ref": r, "text": text })) {
+                // Never end the task over a field type: the model decides what to do next.
+                if err.contains("not a text field") {
+                    return Ok(Some(format!("{err}. It is not a text field; click it, or skip it and say so in done.")));
+                }
+                if err.contains("invalid ") {
+                    return Ok(Some(format!("{err} (time = HH:MM, date = YYYY-MM-DD, datetime-local = YYYY-MM-DDTHH:MM, number = digits).")));
+                }
+                return Err(err);
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `browser_fill_many`: every field in order; a field that fails is a note, the rest still runs
+/// (a forbidden field, the kill switch and a lost connection end the whole call).
+fn fill_many(cx: &Cx, c: &vio::Client, tab: &str, items: &[FillItem]) -> Result<Performed, String> {
+    let mut failed = Vec::new();
+    for it in items {
+        let label = || super::action::target_label(&Target::Id(it.id), cx.snap);
+        match fill_field(cx, c, tab, it.id, &it.value) {
+            Ok(None) => {}
+            Ok(Some(why)) => failed.push(format!("{} NOT set: {}", label(), clip(&why, 120))),
+            Err(e) if e == input::ABORTED || vio::is_forbidden(&e) || e.contains("not connected") || e.contains("closed") => return Err(e),
+            Err(e) => failed.push(format!("{} FAILED: {}", label(), clip(&e, 120))),
+        }
+    }
+    eprintln!("[soul][agent] computer exec browser_fill_many via=vio fields={} failed={}", items.len(), failed.len());
+    killswitch::sleep(VIO_SETTLE);
+    let done = items.len() - failed.len();
+    let detail = if failed.is_empty() { format!(" — {done}/{} fields set", items.len()) } else { format!(" — {done}/{} fields set; {}", items.len(), failed.join("; ")) };
+    Ok(Performed { verified: done > 0, detail, read: None })
 }
 
 /// A Vio step: the API call is the action and its `ok` the verification (no settle polling).
@@ -370,34 +423,21 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
         Action::Click { target, button: MouseButton::Left, count: 1 } => {
             c.call("click", json!({ "tabId": tab, "ref": vref(target)? }))?;
         }
-        Action::TypeText { target: Some(t), text, submit, .. } => {
-            let r = vref(t)?;
-            let skipped = |why: &str| Ok(Performed { verified: true, detail: format!(" — NOT filled: {why}"), read: None });
-            let plan = match t {
-                Target::Id(id) => cx.snap.get(*id).map(|e| vio::fill_plan(e, text)).unwrap_or(vio::FillPlan::Text),
-                Target::Point { .. } => vio::FillPlan::Text,
-            };
-            match plan {
-                vio::FillPlan::Skip(why) => return skipped(&why),
-                vio::FillPlan::AlreadySet => return Ok(Performed { verified: true, detail: " (already set)".into(), read: None }),
-                vio::FillPlan::Click => {
-                    c.call("click", json!({ "tabId": tab, "ref": r }))?;
-                }
-                vio::FillPlan::Text => {
-                    if let Err(e) = c.call("fill", json!({ "tabId": tab, "ref": r, "text": text })) {
-                        // Never end the task over a field type: the model decides what to do next.
-                        if e.contains("not a text field") {
-                            return skipped(&format!("{e}. It is not a text field; click it, or skip it and say so in done."));
-                        }
-                        return Err(e);
-                    }
-                }
+        Action::TypeText { target: Some(Target::Id(id)), text, submit, .. } => {
+            if let Some(why) = fill_field(cx, c, tab, *id, &FillValue::Text(text.clone()))? {
+                return Ok(Performed { verified: true, detail: format!(" — NOT filled: {why}"), read: None });
             }
             if *submit {
                 killswitch::sleep(Duration::from_millis(80));
                 key("Enter")?;
             }
         }
+        Action::Select { target: Target::Id(id), option } => {
+            if let Some(why) = fill_field(cx, c, tab, *id, &FillValue::Option(option.clone()))? {
+                return Ok(Performed { verified: true, detail: format!(" — NOT selected: {why}"), read: None });
+            }
+        }
+        Action::FillMany(items) => return fill_many(cx, c, tab, items),
         Action::KeyCombo(k) => key(&k.label())?,
         Action::Scroll { dir, .. } if dir.is_vertical() => {
             let direction = if *dir == crate::platform::ui::ScrollDir::Up { "up" } else { "down" };
@@ -597,6 +637,11 @@ pub fn done_text(a: &Action, snap: &UiSnapshot, lang: Lang) -> String {
             };
             tr(lang, format!("Przewinąłem {pl}."), format!("Scrolled {en}."))
         }
+        Action::Select { target, option } => {
+            let o = clip(option, 30);
+            tr(lang, format!("Wybrałem \u{201e}{o}\u{201d} w {}.", t(target)), format!("Chose \u{201e}{o}\u{201d} in {}.", t(target)))
+        }
+        Action::FillMany(items) => tr(lang, format!("Wypełniłem {} pól.", items.len()), format!("Filled {} fields.", items.len())),
         Action::Drag { .. } => tr(lang, "Przeciągnąłem.", "Dragged.").to_string(),
         Action::OpenApp(n) => tr(lang, format!("Otworzyłem {n}."), format!("Opened {n}.")),
         Action::OpenSettings(p) => tr(lang, format!("Otworzyłem ustawienia: {p}."), format!("Opened settings: {p}.")),

@@ -4,7 +4,7 @@
 //!
 //! Verdict order: Refuse > Confirm > Allow.
 
-use super::action::{Action, Decision, Target};
+use super::action::{Action, Decision, FillValue, Target};
 use crate::agent::fold_word;
 use crate::platform::input::Key;
 use crate::platform::ui::{clip, Role, UiElement, UiSnapshot, WindowInfo};
@@ -265,6 +265,18 @@ pub fn check_step(d: &Decision, s: &UiSnapshot, level: ConfirmLevel) -> Verdict 
             }
             if looks_like_secret(text) {
                 return Verdict::Refuse("To wygląda na hasło albo klucz — nie wpisuję sekretów.".into());
+            }
+        }
+        Action::FillMany(items) => {
+            for it in items {
+                if s.get(it.id).is_some_and(|e| e.password) {
+                    return Verdict::Refuse("To pole hasła — nie wpisuję haseł. Zrób to sam(a).".into());
+                }
+                if let FillValue::Text(t) | FillValue::Option(t) = &it.value {
+                    if looks_like_secret(t) {
+                        return Verdict::Refuse("To wygląda na hasło albo klucz — nie wpisuję sekretów.".into());
+                    }
+                }
             }
         }
         Action::ReadText(id) => {

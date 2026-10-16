@@ -80,6 +80,12 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   `Client::call` 10 s / kill switch / 20 cmds/s, token redacted) — a step uses Vio when connected and Vio is in front or
   `intent::names_browser`; page → `UiSnapshot { source: Vio }` (ref = `automation_id`, `empty` flag), `browser_*` tools
   parse into the normal actions (same safety/limits), „forbidden” ends the task; `vio_mock.rs` + `tests/agent/vio-mock.json`.
+  Forms: `browser_select {id, option}` (`selectOption`; option resolved against the element's `options`), `browser_fill` also does
+  time/date/number natively and routes a `<select>` to `selectOption`, `browser_fill_many {fields:[{id, text|option|checked}]}` =
+  one step, per-field results (a failed field is a note; password/secret/forbidden/abort end it; `safety` checks every field).
+  `vio::elements_of` lists a page with form fields whole (`getElements {all:true}`, `offscreen` in the observation).
+  Dictation, the `type_text` tool and `text_action` go through `vio::paste_text` / `vio::read_selection` (`insertText` /
+  `getSelection`, no clipboard) when Vio is connected and in front, else the platform clipboard path; a password field is never bypassed.
   Platform: `platform/ui.rs` (snapshot model, `finalize`, observation text), `coords.rs`, `input.rs` (`execute` always
   releases keys), `marks.rs` (set-of-marks JPEG), `windows_uia.rs` (UIA worker thread owns all COM objects),
   `linux_atspi.rs` (AT-SPI + enigo, untested on a real desktop), Wayland refuses. Harness: `npm run test:agent [-- --real]`.
