@@ -90,9 +90,9 @@ Latency = talk key released → pipeline done (incl. spoken reply); stt = transc
   - said / heard „Wyszukaj na YouTube przepis na naleśniki i włącz drugi wynik”
 - **`form_fill_long`** — agent stopped („Zapętliłem się”); Godzina dostawy = "" (want 18:30), Sos = „— wybierz —” (want Czosnkowy), Uwagi = "" · *likely cause:* Vio's API cannot set `<select>` / `<input type=time>` (the model keeps retrying the skipped field), and one field per model call does not fit the 90 s budget while Gemini answers 503 — needs Vio changes (README) and a multi-field agent step.
   - said „Wypełnij formularz: imię i nazwisko Jan Kowalski, telefon 600 700 800, e-mail jan.kowalski@example.com, rozmiar duża, dodatki ser i oliwki, sos czosnkowy, godzina dostawy 18:30, a w uwagach napisz: proszę dzwonić domofonem.” — heard correctly (as a formatted list).
-- **`form_select_sauce`** — agent failed: all models 503 · *likely cause:* Gemini overloaded (503 „high demand” on every model in rotation) — provider-side; passed in run 1.
+- **`form_select_sauce`** — agent failed: all models 503 · *likely cause:* Gemini overloaded (503 „high demand” on every model in rotation) — provider-side. Not verified yet: in run 1 it was routed to dictation (fixed since), in runs 2–4 every model answered 503.
   - said / heard „Wybierz sos ostry”
-- **`text_fix`** — `text_action fix` failed: all models 503 / timeout · *likely cause:* Gemini overloaded (503) — provider-side; the same path passed `text_translate` in this run.
+- **`text_fix`** — `text_action fix` failed: all models 503 / timeout · *likely cause:* Gemini overloaded (503) — provider-side; `text_fix` passed in run 3, and the same path passed `text_translate` in this run.
   - said / heard „Popraw to”
 
 ## After this run
@@ -100,7 +100,7 @@ Latency = talk key released → pipeline done (incl. spoken reply); stt = transc
 - `scene_run`: expectation now checks that the scene ran (any name the phonetic match resolves).
 - `youtube_second_result`: „…i włącz drugi wynik” now goes straight to the Soul Agent. A verification run routed it
   correctly (navigate → search) but every Gemini model then answered 503, so it is not verified end to end yet.
-- Gemini's free tier was in a sustained 503 „high demand” state during runs 2–4 (see the HTTP column); the 503-only
-  failures passed in earlier runs.
+- Gemini's free tier was in a sustained 503 „high demand” state during runs 2–4 (see the HTTP column). Of the 503-only
+  failures, `text_fix` passed in run 3; `form_select_sauce` has not passed in any run yet.
 
 **Skipped:** `foreign_rejected` (needs a Gemini TTS take: the offline Polish voice cannot speak „es”)
