@@ -186,6 +186,78 @@
       "task": "otwórz example.com/nowa w przeglądarce",
       "script": [["open_url", { "url": "example.com/nowa", "final": true }]],
       "expect": { "opened": ["https://example.com/nowa"] }
+    },
+    {
+      "id": "vio_v2_click_highlights_first",
+      "v2": true,
+      "task": "kliknij Newsletter",
+      "script": [],
+      "expect": { "clicked": ["Newsletter"] },
+      "expect_cmds": ["hello", "subscribe", "highlight", "click", "clearHighlight"]
+    },
+    {
+      "id": "vio_v2_summary_reads_the_article",
+      "v2": true,
+      "task": "streść tę stronę",
+      "script": [["done", { "summary": "Zgłoszenia przyjmowane są do piątku." }]],
+      "expect_summary": ["piątk"],
+      "expect_cmds": ["getReadable"],
+      "expect_no_cmds": ["getPage"],
+      "expect_prompt": ["Redakcja"]
+    },
+    {
+      "id": "vio_v2_tools_offered",
+      "v2": true,
+      "task": "sprawdź które pola są puste",
+      "script": [["done", { "summary": "Puste są E-mail i Miasto." }]],
+      "expect_prompt": ["browser_media", "browser_find", "browser_tab", "browser_search"]
+    },
+    {
+      "id": "vio_v1_has_no_v2_tools",
+      "task": "sprawdź które pola są puste",
+      "script": [["done", { "summary": "Puste są E-mail i Miasto." }]],
+      "expect_prompt_lacks": ["browser_media", "browser_find"],
+      "expect_no_cmds": ["subscribe", "setSoulState"]
+    },
+    {
+      "id": "vio_v2_screenshot_goes_to_the_next_turn",
+      "v2": true,
+      "task": "spójrz na kartę i powiedz, co na niej jest",
+      "script": [["browser_screenshot", {}], ["done", { "summary": "Formularz zgłoszeniowy." }]],
+      "expect_cmds": ["screenshot"],
+      "expect_prompt": ["[IMAGE]"]
+    },
+    {
+      "id": "vio_v2_find_on_page",
+      "v2": true,
+      "task": "pokaż na stronie słowo piątku",
+      "script": [["browser_find", { "text": "piątku" }], ["done", { "summary": "Zaznaczyłem." }]],
+      "expect_cmds": ["findInPage"],
+      "expect_prompt": ["1 matches"]
+    },
+    {
+      "id": "vio_v2_history_then_open",
+      "v2": true,
+      "task": "znajdź w historii przepis na bigos i go otwórz",
+      "script": [["browser_search", { "query": "bigos" }], ["browser_open", { "url": "https://kuchnia.pl/bigos", "final": true }]],
+      "expect_cmds": ["searchHistory", "openTab"],
+      "expect_prompt": ["Bigos staropolski"],
+      "expect": { "opened": ["https://kuchnia.pl/bigos"] }
+    },
+    {
+      "id": "vio_v2_media_without_player_is_explained",
+      "v2": true,
+      "task": "zatrzymaj film na tej stronie",
+      "script": [["browser_media", { "action": "pause" }], ["done", { "summary": "Na tej stronie nie ma odtwarzacza." }]],
+      "expect_prompt": ["another site"]
+    },
+    {
+      "id": "vio_v2_back_without_history",
+      "v2": true,
+      "task": "wróć do poprzedniej strony w przeglądarce",
+      "script": [["browser_tab", { "op": "back" }], ["done", { "summary": "Nie ma dokąd wrócić." }]],
+      "expect_cmds": ["goBack"],
+      "expect_prompt": ["cannot go back"]
     }
   ]
 }

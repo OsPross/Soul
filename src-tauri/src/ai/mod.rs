@@ -5,3 +5,4 @@ pub mod pool;
 #[cfg(test)]
 pub(crate) mod live_smoke;
 pub mod quota;
+pub mod usage;

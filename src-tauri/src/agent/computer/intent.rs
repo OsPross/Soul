@@ -59,6 +59,10 @@ fn words_after_fillers(text: &str) -> Vec<String> {
 
 /// Should this command be handled by the computer agent?
 pub fn is_computer_task(text: &str) -> bool {
+    // A browser command Vio does directly („przewiń do sekcji X”, „znajdź na stronie X”).
+    if crate::agent::browser::route(text).is_some() {
+        return false;
+    }
     let words = words_after_fillers(text);
     let Some(first) = words.first() else {
         return false;

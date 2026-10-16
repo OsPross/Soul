@@ -1065,6 +1065,373 @@
       }
     },
     {
+      "id": "browser_find",
+      "cap": "browser · findInPage (no model)",
+      "text": "Znajdź na stronie latarnia",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "find",
+              "query": "latarni"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_scroll_to",
+      "cap": "browser · scrollTo text",
+      "text": "Przewiń stronę do wypożyczalni",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "scroll_to",
+              "query": "wypożyczal"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_read_article",
+      "cap": "browser · getReadable read aloud",
+      "text": "Przeczytaj artykuł",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "read_article"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_tab_pin",
+      "cap": "browser · pinTab",
+      "text": "Przypnij kartę",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "tab",
+              "action": "pin"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_tab_mute",
+      "cap": "browser · muteTab",
+      "text": "Wycisz kartę",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "tab",
+              "action": "mute"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_reopen_tab",
+      "cap": "browser · reopenClosedTab",
+      "text": "Przywróć zamkniętą kartę",
+      "setup": {
+        "tabs": [
+          "article"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "tab",
+              "action": "reopen"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_history",
+      "cap": "browser · searchHistory → open",
+      "text": "Znajdź w historii przepis na bigos",
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "history",
+              "query": "bigos"
+            }
+          }
+        ],
+        "vio": {
+          "active_url": [
+            "google.",
+            "youtube.com"
+          ]
+        }
+      }
+    },
+    {
+      "id": "browser_watch_price",
+      "cap": "price watch · fetch + parse (no model)",
+      "text": "Obserwuj cenę tej strony",
+      "setup": {
+        "tabs": [
+          "product"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "watch_price"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_list_watches",
+      "cap": "price watch · list",
+      "text": "Pokaż obserwowane ceny",
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "list_watches"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_unwatch",
+      "cap": "price watch · remove (current page)",
+      "text": "Przestań obserwować cenę tej strony",
+      "setup": {
+        "tabs": [
+          "product"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "unwatch"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_save_scene",
+      "cap": "tab scene · save Vio tabs",
+      "text": "Zapisz scenę testowa",
+      "setup": {
+        "tabs": [
+          "article",
+          "links"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "save_scene",
+              "name": "testowa"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_open_scene",
+      "cap": "tab scene · open (run_scene)",
+      "text": "Otwórz scenę testowa",
+      "setup": {
+        "tabs": [
+          "notes"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "tools": [
+          {
+            "name": "run_scene"
+          }
+        ],
+        "vio": {
+          "tab_url": "links.html"
+        }
+      }
+    },
+    {
+      "id": "browser_delete_scene",
+      "cap": "tab scene · delete",
+      "text": "Usuń scenę testowa",
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "delete_scene",
+              "name": "testowa"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_media_seek",
+      "cap": "browser · mediaControl seekBy",
+      "text": "Przewiń o trzydzieści sekund",
+      "transcript": "Przewiń o 30 sekund",
+      "setup": {
+        "tabs": [
+          "media"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "media",
+              "action": "seekBy"
+            }
+          }
+        ],
+        "vio": {
+          "page_contains": [
+            "0:3"
+          ]
+        }
+      }
+    },
+    {
+      "id": "browser_media_faster",
+      "cap": "browser · mediaControl rate",
+      "text": "Szybciej",
+      "setup": {
+        "tabs": [
+          "media"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "media",
+              "action": "faster"
+            }
+          }
+        ],
+        "vio": {
+          "page_contains": [
+            "×1.25"
+          ]
+        }
+      }
+    },
+    {
+      "id": "browser_media_pause",
+      "cap": "browser · mediaControl pause (Vio media playing)",
+      "text": "Pauza",
+      "setup": {
+        "tabs": [
+          "media"
+        ]
+      },
+      "expect": {
+        "route": "command",
+        "via": "local",
+        "tools": [
+          {
+            "name": "browser",
+            "args": {
+              "op": "media",
+              "action": "pause"
+            }
+          }
+        ],
+        "vio": {
+          "page_contains": [
+            "Stan: pauza"
+          ]
+        }
+      }
+    },
+    {
       "id": "foreign_rejected",
       "cap": "non-Polish utterance must be rejected",
       "text": "Por favor, abre YouTube y pon música relajante.",

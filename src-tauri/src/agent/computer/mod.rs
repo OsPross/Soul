@@ -17,6 +17,7 @@ pub mod killswitch;
 pub mod prompt;
 pub mod safety;
 pub mod vio;
+pub mod vio_ctx;
 #[cfg(test)]
 mod vio_mock;
 
@@ -146,6 +147,8 @@ struct Run<'a> {
     monitors: Vec<Monitor>,
     debug: Option<std::path::PathBuf>,
     vio: Option<Arc<vio::Client>>,
+    /// `browser_screenshot` result for the next model call.
+    vio_shot: Option<Vec<u8>>,
 }
 
 /// Restores capture exclusion when the task ends (any path).
@@ -182,6 +185,7 @@ pub fn run_task(host: &dyn Host, task: &str) -> Outcome {
         debug: if cfg.debug_screenshots { host.debug_dir() } else { None },
         cfg,
         vio: host.vio(),
+        vio_shot: None,
     };
     if !run.cfg.enabled {
         return run.finish(
@@ -312,8 +316,22 @@ impl Run<'_> {
         Some((Arc::clone(c), fg))
     }
 
-    /// Active tab + its elements as a snapshot. A sleeping (discarded) tab is woken first.
+    /// Active tab + its elements as a snapshot. A sleeping (discarded) tab is woken first. With
+    /// events the active tab is known (no `listTabs`); if that fails the tab list decides.
     fn vio_snapshot(&self, c: &vio::Client, window: Option<crate::platform::ui::WindowInfo>) -> Result<(UiSnapshot, String), String> {
+        let ctx = c.context();
+        if let Some(id) = ctx.tab.as_ref().filter(|_| ctx.live) {
+            match vio::elements_of(c, id) {
+                Ok(elements) => {
+                    let tab = serde_json::json!({ "tabId": id, "title": ctx.title, "url": ctx.url });
+                    return Ok((vio::snapshot(&tab, &elements, window), id.clone()));
+                }
+                Err(e) if e == crate::platform::input::ABORTED => return Err(e),
+                // A stale tab (closed, or the user is on an internal page): the tab list decides,
+                // a real „forbidden” comes back from there.
+                Err(e) => eprintln!("[soul][agent] vio active tab from events failed: {e} — listTabs"),
+            }
+        }
         let tabs = c.call("listTabs", serde_json::json!({}))?;
         let (tab, id) = vio::active_tab(&tabs).ok_or("Vio has no open tab.")?;
         let elements = vio::elements_of(c, &id)?;
@@ -467,10 +485,11 @@ impl Run<'_> {
             let mut region = self.region(&snap);
 
             // ── decide ──
+            let article = vio.as_ref().is_some_and(|(c, _)| c.has("getReadable"));
             let local = if self.step == 1 {
                 intent::local_plan(&self.task, &snap)
                     // „streść tę stronę” in Vio: read the active tab right away, the model only answers.
-                    .or_else(|| (tab.is_some() && intent::is_read_page_task(&self.task)).then(read_page_plan))
+                    .or_else(|| (tab.is_some() && intent::is_read_page_task(&self.task)).then(|| read_page_plan(article)))
             } else {
                 None
             };
@@ -488,6 +507,9 @@ impl Run<'_> {
                     if let Some(sh) = &shot {
                         region = sh.region;
                     }
+                    let vio_shot = if tab.is_some() { self.vio_shot.take() } else { None };
+                    let caps = vio.as_ref().and_then(|(c, _)| c.caps()).map(|c| c.commands).unwrap_or_default();
+                    let browser_line = vio.as_ref().and_then(|(c, _)| c.context().observation());
                     let note = self.note.take();
                     let obs = prompt::Observation {
                         task: &self.task,
@@ -499,7 +521,9 @@ impl Run<'_> {
                         snapshot: &snap,
                         vision,
                         note: note.as_deref(),
-                        jpeg: shot.as_ref().map(|s| s.jpeg.as_slice()),
+                        jpeg: shot.as_ref().map(|s| s.jpeg.as_slice()).or(vio_shot.as_deref()),
+                        vio_caps: &caps,
+                        browser: browser_line.as_deref(),
                     };
                     let body = prompt::request_body(&obs, &self.host.language());
                     self.progress(Phase::Running, tr(self.lang, "Myślę…", "Thinking…"));
@@ -545,7 +569,13 @@ impl Run<'_> {
                 // A repeated read gets its earlier result again („already above” must be true).
                 let read_again = matches!(
                     decision.action,
-                    Action::Browser(action::BrowserOp::ListTabs | action::BrowserOp::ReadPage | action::BrowserOp::GetElements)
+                    Action::Browser(
+                        action::BrowserOp::ListTabs
+                            | action::BrowserOp::ReadPage
+                            | action::BrowserOp::GetElements
+                            | action::BrowserOp::ReadArticle
+                            | action::BrowserOp::Search { .. }
+                    )
                 );
                 self.note = match (&self.last_read, read_again) {
                     (Some(read), true) => Some(read.clone()),
@@ -665,6 +695,9 @@ impl Run<'_> {
                         self.note = Some(text.clone());
                         self.last_read = Some(text.clone());
                     }
+                    if done.shot.is_some() {
+                        self.vio_shot = done.shot;
+                    }
                     let status = if done.verified { "ok" } else { "FAILED" };
                     self.history.push(format!("{line} → {status}{}", done.detail));
                     self.log(&line, &format!("{status}{}", done.detail), done.verified, ms, from_model, shot_taken);
@@ -702,9 +735,15 @@ impl Run<'_> {
     }
 }
 
-/// A page read as the first (model-free) step of „streść / przeczytaj tę stronę”.
-fn read_page_plan() -> Decision {
-    Decision { action: Action::Browser(action::BrowserOp::ReadPage), risky: false, final_step: false, look: false, name: "browser_read_page".into() }
+/// A page read as the first (model-free) step of „streść / przeczytaj tę stronę”: the article's
+/// main text when Vio can extract it, else the whole page.
+fn read_page_plan(article: bool) -> Decision {
+    let (op, name) = if article {
+        (action::BrowserOp::ReadArticle, "browser_read_article")
+    } else {
+        (action::BrowserOp::ReadPage, "browser_read_page")
+    };
+    Decision { action: Action::Browser(op), risky: false, final_step: false, look: false, name: name.into() }
 }
 
 /// What to tell the model after it repeated an identical call.

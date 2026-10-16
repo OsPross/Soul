@@ -921,9 +921,26 @@ impl Listener {
 /// Wake word fired: same flow as holding the talk key, ended by the endpointer instead of the
 /// key release. Blocks the listener thread (detection is paused meanwhile anyway).
 fn capture_after_wake(app: &AppHandle, d: Detection) {
+    hands_free_capture(app, "wake word", &|| {
+        eprintln!(
+            "[soul][wake] false positive? no speech after wake word score={:.3} avg={:.3} hits={}",
+            d.score, d.avg_score, d.hits
+        );
+        crate::soul_debug!("[soul][wake] false_positive score={:.3}", d.score);
+    });
+}
+
+/// The Soul icon in Vio was clicked: listen once like after the wake word (ends on silence).
+pub fn listen_hands_free(app: &AppHandle, why: &'static str) {
+    let app = app.clone();
+    thread::spawn(move || hands_free_capture(&app, why, &|| eprintln!("[soul][wake] {why}: no speech")));
+}
+
+/// One talk-key-like turn ended by the energy endpointer instead of a key release.
+fn hands_free_capture(app: &AppHandle, why: &str, no_speech: &dyn Fn()) {
     let state = app.state::<AppState>();
     if *state.busy.lock() || state.recorder.is_capturing() || ask::is_active(&state.ask) {
-        eprintln!("[soul][wake] detection ignored (busy / recording / Ask open)");
+        eprintln!("[soul][wake] {why} ignored (busy / recording / Ask open)");
         return;
     }
     agent::barge_in(app);
@@ -946,11 +963,7 @@ fn capture_after_wake(app: &AppHandle, d: Detection) {
         match vad.push(state.recorder.level(), VAD_TICK.as_millis() as u64) {
             Endpoint::Continue => {}
             Endpoint::NoSpeech => {
-                eprintln!(
-                    "[soul][wake] false positive? no speech after wake word score={:.3} avg={:.3} hits={}",
-                    d.score, d.avg_score, d.hits
-                );
-                crate::soul_debug!("[soul][wake] false_positive score={:.3}", d.score);
+                no_speech();
                 cancel_capture(app, &gate);
                 schedule_hide(app, 0);
                 return;

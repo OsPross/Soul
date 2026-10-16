@@ -1,5 +1,6 @@
 //! Local long-term memory: one SQLite file (`soul-memory.db` in the app data dir) with remembered
-//! facts + voice notes, scenes and the app-launch history used for scene suggestions.
+//! facts + voice notes, scenes, the app-launch history used for scene suggestions and the price
+//! watches (`price_watch.rs`).
 //!
 //! One global connection behind a mutex; every call is a few short statements, so callers on
 //! worker threads (agent, Tauri async commands) never wait long. Nothing here touches the UI thread.
@@ -81,7 +82,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              app TEXT NOT NULL,
              at INTEGER NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS dismissed (key TEXT PRIMARY KEY);",
+         CREATE TABLE IF NOT EXISTS dismissed (key TEXT PRIMARY KEY);
+         CREATE TABLE IF NOT EXISTS price_watches (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             url TEXT NOT NULL UNIQUE,
+             title TEXT NOT NULL DEFAULT '',
+             price REAL NOT NULL,
+             currency TEXT NOT NULL DEFAULT '',
+             anchor TEXT NOT NULL DEFAULT '',
+             last_price REAL NOT NULL,
+             checked_at INTEGER NOT NULL DEFAULT 0,
+             created_at INTEGER NOT NULL
+         );",
     )
 }
 

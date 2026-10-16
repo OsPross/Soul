@@ -7,7 +7,13 @@
 //! authorizes with `{cmd:"auth", token}` (Vio may show a consent dialog: up to 30 s, the Island
 //! shows „Zezwól w Vio”) and then serves `{id, cmd, args}` → `{id, ok, result|error}` requests
 //! from the agent thread (`Client::call`, 10 s, abortable by the kill switch, ≤ 20 commands/s).
-//! The connection drops when the file disappears or the pid dies, and comes back when it returns.
+//! The connection drops when the file disappears or the pid dies, and comes back when it returns
+//! (failed connects back off 2 → 30 s).
+//!
+//! API v2 (`docs/automation-api.md` in Vio): after auth Soul sends `hello`, keeps the capabilities
+//! and subscribes to the events Vio announces (`vio_ctx.rs`: browser context, Soul icon / panel /
+//! STOP signals) and mirrors its state with a debounced `setSoulState`. Every v2 feature is gated
+//! on the capabilities, so an old Vio (no `hello`) keeps the v1 behaviour.
 //!
 //! A page becomes a [`UiSnapshot`] (`Source::Vio`, ref in `automation_id`), so local plans,
 //! safety verdicts and step limits are the same as for any other window. „forbidden” errors
@@ -15,6 +21,7 @@
 //! The token is never logged; `gemini::redact_secrets` scrubs it from error text.
 
 use super::action::FillValue;
+use super::vio_ctx::{next_backoff, BrowserCtx, Caps, Signal, StateGate, TextRoute};
 use crate::i18n::{tr, Lang};
 use crate::platform::ui::{clip, Rect, Role, Source, UiElement, UiSnapshot, WindowInfo, MAX_ELEMENTS};
 use futures_util::{SinkExt, StreamExt};
@@ -22,7 +29,7 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -34,6 +41,21 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_secs(2);
 /// Vio's rate limit is 20 commands/s.
 const MIN_GAP: Duration = Duration::from_millis(50);
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the actor checks for a `setSoulState` to send.
+const STATE_TICK: Duration = Duration::from_millis(100);
+/// Vio's answer for 3 s after the user pressed STOP: expected, never an error.
+const STOPPED: &str = "stopped by user";
+
+/// How a session ended.
+enum End {
+    /// Auth refused / consent not given: no automatic retry (no dialog spam).
+    Refused(String),
+    /// No connection at all (port closed): retry with backoff.
+    ConnectFailed,
+    /// A working session ended (Vio quit, file changed, agent switched off).
+    Closed,
+}
 
 /// What Vio writes while its API is enabled. No `Debug`: it holds the token.
 #[derive(Clone, PartialEq, serde::Deserialize)]
@@ -100,13 +122,23 @@ struct Shared {
     /// Token Vio refused (or whose consent dialog timed out): no retry — no dialog spam — until
     /// the file changes or the agent is switched off and on.
     refused: Option<String>,
+    /// From `hello`; `None` = v1 Vio (or not connected).
+    caps: Option<Caps>,
+    ctx: BrowserCtx,
+    /// The Soul state Vio should show (state, tooltip); sent by the actor, debounced.
+    want: (String, String),
 }
+
+type SignalFn = Arc<dyn Fn(Signal) + Send + Sync>;
 
 pub struct Client {
     path: PathBuf,
     enabled: AtomicBool,
     shared: Mutex<Shared>,
     on_status: Box<dyn Fn(&VioStatus) + Send + Sync>,
+    on_signal: Mutex<Option<SignalFn>>,
+    /// Bumped by [`Client::cancel_all`]: waiting calls return „aborted”.
+    cancel_gen: AtomicU64,
 }
 
 impl Client {
@@ -120,8 +152,13 @@ impl Client {
                 tx: None,
                 pid: 0,
                 refused: None,
+                caps: None,
+                ctx: BrowserCtx::default(),
+                want: ("idle".into(), String::new()),
             }),
             on_status,
+            on_signal: Mutex::new(None),
+            cancel_gen: AtomicU64::new(0),
         });
         tauri::async_runtime::spawn(Arc::clone(&c).actor());
         c
@@ -134,6 +171,41 @@ impl Client {
     /// Vio's main process (foreground-window match).
     pub fn pid(&self) -> u32 {
         self.shared.lock().pid
+    }
+
+    /// Soul icon / panel / STOP from Vio.
+    pub fn on_signal(&self, f: SignalFn) {
+        *self.on_signal.lock() = Some(f);
+    }
+
+    /// Vio announced this (v2) command.
+    pub fn has(&self, cmd: &str) -> bool {
+        self.shared.lock().caps.as_ref().is_some_and(|c| c.has(cmd))
+    }
+
+    pub fn caps(&self) -> Option<Caps> {
+        self.shared.lock().caps.clone()
+    }
+
+    /// The browser context from events (`live: false` without them).
+    pub fn context(&self) -> BrowserCtx {
+        self.shared.lock().ctx.clone()
+    }
+
+    /// Change the context Soul keeps itself (the playback rate it set).
+    pub fn update_context(&self, f: impl FnOnce(&mut BrowserCtx)) {
+        f(&mut self.shared.lock().ctx);
+    }
+
+    /// The state the Soul icon in Vio should show; the actor sends it (debounced) when Vio has
+    /// `setSoulState`.
+    pub fn set_soul_state(&self, state: &str, text: &str) {
+        self.shared.lock().want = (state.to_string(), clip(text, 200));
+    }
+
+    /// Fail every waiting call now (STOP): they return „aborted”.
+    pub fn cancel_all(&self) {
+        self.cancel_gen.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn set_enabled(&self, on: bool) {
@@ -170,18 +242,25 @@ impl Client {
         }
     }
 
-    /// One command, blocking (agent thread): ≤ 10 s, aborted by the kill switch.
+    /// One command, blocking (agent thread): ≤ 10 s, aborted by the kill switch, by
+    /// [`Client::cancel_all`] and by Vio's „stopped by user” (the 3 s after STOP).
     pub fn call(&self, cmd: &str, args: Value) -> Result<Value, String> {
+        let gen = self.cancel_gen.load(Ordering::SeqCst);
         let tx = self.shared.lock().tx.clone().ok_or("Vio is not connected.")?;
         let (reply, rx) = mpsc::channel();
         tx.send(Req { cmd: cmd.to_string(), args, reply }).map_err(|_| "Vio is not connected.")?;
         let deadline = Instant::now() + CALL_TIMEOUT;
+        let aborted = || Err(crate::platform::input::ABORTED.to_string());
         loop {
             // The kill switch only applies while a task runs (it stays set after one was stopped).
-            if super::killswitch::is_running() && super::killswitch::aborted() {
-                return Err(crate::platform::input::ABORTED.into());
+            if (super::killswitch::is_running() && super::killswitch::aborted()) || self.cancel_gen.load(Ordering::SeqCst) != gen {
+                return aborted();
             }
             match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Err(e)) if e.contains(STOPPED) => {
+                    eprintln!("[soul][agent] vio {cmd}: stopped by the user (expected)");
+                    return aborted();
+                }
                 Ok(r) => return r.map_err(|e| format!("Vio: {}", redact(&e))),
                 Err(RecvTimeoutError::Timeout) if Instant::now() < deadline => continue,
                 Err(RecvTimeoutError::Timeout) => return Err(format!("Vio did not answer {cmd} within 10 s.")),
@@ -191,38 +270,54 @@ impl Client {
     }
 
     async fn actor(self: Arc<Self>) {
+        let mut backoff = POLL;
         loop {
             let found = if self.enabled.load(Ordering::SeqCst) { discover(&self.path) } else { None };
+            let mut wait = POLL;
             match found {
                 Some(d) => {
                     *KNOWN_TOKEN.lock() = Some(d.token.clone());
                     let refused = self.shared.lock().refused.as_deref() == Some(d.token.as_str());
                     if !refused {
-                        let why = self.session(&d).await;
-                        if why.is_some() {
-                            self.shared.lock().refused = Some(d.token.clone());
-                        }
+                        let why = match self.session(&d).await {
+                            End::Refused(why) => {
+                                self.shared.lock().refused = Some(d.token.clone());
+                                Some(why)
+                            }
+                            End::ConnectFailed => {
+                                backoff = next_backoff(backoff);
+                                wait = backoff;
+                                None
+                            }
+                            End::Closed => {
+                                backoff = POLL;
+                                None
+                            }
+                        };
                         self.set_status(State::Unavailable, why);
                     }
                 }
-                None => self.set_status(State::Unavailable, None),
+                None => {
+                    backoff = POLL;
+                    self.set_status(State::Unavailable, None);
+                }
             }
-            tokio::time::sleep(POLL).await;
+            tokio::time::sleep(wait).await;
         }
     }
 
-    /// One connection. Returns why the auth was refused (no automatic retry), else `None`.
-    async fn session(&self, d: &Discovery) -> Option<String> {
+    /// One connection: auth, `hello` + `subscribe` (v2), then requests, events and state.
+    async fn session(&self, d: &Discovery) -> End {
         let url = format!("ws://127.0.0.1:{}", d.port);
         let ws = match tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url.as_str())).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(e)) => {
                 eprintln!("[soul][agent] vio connect failed (port {}): {}", d.port, redact(&e.to_string()));
-                return None;
+                return End::ConnectFailed;
             }
             Err(_) => {
                 eprintln!("[soul][agent] vio connect timed out (port {})", d.port);
-                return None;
+                return End::ConnectFailed;
             }
         };
         let (mut sink, mut stream) = ws.split();
@@ -230,7 +325,7 @@ impl Client {
         eprintln!("[soul][agent] vio connected (port {}, pid {}) — authorizing", d.port, d.pid);
         let auth = json!({ "id": 0, "cmd": "auth", "token": d.token }).to_string();
         if sink.send(Message::Text(auth.into())).await.is_err() {
-            return None;
+            return End::Closed;
         }
         let reply = tokio::time::timeout(AUTH_TIMEOUT, async {
             while let Some(msg) = stream.next().await {
@@ -248,24 +343,66 @@ impl Client {
             Ok(Some(v)) => {
                 let e = v["error"].as_str().map(str::to_string).unwrap_or_else(|| "auth refused".into());
                 eprintln!("[soul][agent] vio auth refused: {}", redact(&e));
-                return Some(format!("Vio refused access: {}", redact(&e)));
+                return End::Refused(format!("Vio refused access: {}", redact(&e)));
             }
-            Ok(None) => return Some("Vio closed the connection during authorization (access denied?).".into()),
-            Err(_) => return Some("No answer from Vio within 30 s (consent dialog not accepted).".into()),
+            Ok(None) => return End::Refused("Vio closed the connection during authorization (access denied?).".into()),
+            Err(_) => return End::Refused("No answer from Vio within 30 s (consent dialog not accepted).".into()),
         }
+
+        // v2 handshake. A v1 Vio answers „unknown command”: no capabilities, the old behaviour.
+        let mut next_id = 0u64;
+        let mut ask = |cmd: &str, args: Value| {
+            next_id += 1;
+            (next_id, json!({ "id": next_id, "cmd": cmd, "args": args }).to_string())
+        };
+        let (id, hello) = ask("hello", json!({ "client": "soul", "version": env!("CARGO_PKG_VERSION") }));
+        let mut early = Vec::new();
+        let caps = match handshake_call(&mut sink, &mut stream, id, hello, &mut early).await {
+            Ok(v) => Caps::parse(&v),
+            Err(e) => {
+                eprintln!("[soul][agent] vio hello: {} — API v1", redact(&e));
+                None
+            }
+        };
+        let events = caps.as_ref().map(Caps::subscribable).unwrap_or_default();
+        let mut live = false;
+        if !events.is_empty() {
+            let (id, sub) = ask("subscribe", json!({ "events": events }));
+            match handshake_call(&mut sink, &mut stream, id, sub, &mut early).await {
+                Ok(_) => live = true,
+                Err(e) => eprintln!("[soul][agent] vio subscribe failed: {}", redact(&e)),
+            }
+        }
+        if let Some(c) = &caps {
+            eprintln!(
+                "[soul][agent] vio hello: api={} vio={} commands={} events={}",
+                c.api_version,
+                c.vio_version,
+                c.commands.len(),
+                if live { events.len() } else { 0 }
+            );
+        }
+        let can_state = caps.as_ref().is_some_and(|c| c.has("setSoulState"));
+        let mut gate = StateGate::default();
+        gate.reset();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Req>();
         {
             let mut sh = self.shared.lock();
             sh.tx = Some(tx);
             sh.pid = d.pid;
+            sh.caps = caps;
+            sh.ctx = BrowserCtx { live, ..Default::default() };
+        }
+        for v in early {
+            self.event(v["event"].as_str().unwrap_or_default(), &v["data"]);
         }
         self.set_status(State::Connected, None);
         eprintln!("[soul][agent] vio authorized");
         let mut pending: HashMap<u64, mpsc::Sender<Result<Value, String>>> = HashMap::new();
-        let mut next_id = 0u64;
         let mut last_send = Instant::now() - MIN_GAP;
         let mut check = tokio::time::interval(POLL);
+        let mut state_tick = tokio::time::interval(STATE_TICK);
         loop {
             tokio::select! {
                 Some(req) = rx.recv() => {
@@ -285,7 +422,9 @@ impl Client {
                 msg = stream.next() => match msg {
                     Some(Ok(Message::Text(t))) => {
                         let Ok(v) = serde_json::from_str::<Value>(t.as_str()) else { continue };
-                        if let Some(reply) = v["id"].as_u64().and_then(|id| pending.remove(&id)) {
+                        if v["type"] == json!("event") {
+                            self.event(v["event"].as_str().unwrap_or_default(), &v["data"]);
+                        } else if let Some(reply) = v["id"].as_u64().and_then(|id| pending.remove(&id)) {
                             let r = if v["ok"] == json!(true) {
                                 Ok(v["result"].clone())
                             } else {
@@ -297,6 +436,18 @@ impl Client {
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
                     Some(Ok(_)) => {}
                 },
+                _ = state_tick.tick(), if can_state => {
+                    let want = self.shared.lock().want.clone();
+                    if gate.take(&want, Instant::now()) {
+                        next_id += 1;
+                        // Fire and forget: its reply finds no pending entry.
+                        let msg = json!({ "id": next_id, "cmd": "setSoulState", "args": { "state": want.0, "text": want.1 } });
+                        last_send = Instant::now();
+                        if sink.send(Message::Text(msg.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
                 _ = check.tick() => {
                     if !self.enabled.load(Ordering::SeqCst) || discover(&self.path).as_ref() != Some(d) {
                         break;
@@ -304,11 +455,70 @@ impl Client {
                 }
             }
         }
-        // Dropping `pending` fails the waiting calls ("connection closed").
-        self.shared.lock().tx = None;
+        // Dropping `pending` fails the waiting calls ("connection closed"). Vio resets its Soul
+        // icon to idle when the last client disconnects.
+        {
+            let mut sh = self.shared.lock();
+            sh.tx = None;
+            sh.caps = None;
+            sh.ctx = BrowserCtx::default();
+        }
         eprintln!("[soul][agent] vio disconnected");
-        None
+        End::Closed
     }
+
+    fn event(&self, name: &str, data: &Value) {
+        let signal = self.shared.lock().ctx.apply(name, data);
+        crate::soul_debug!("[soul][agent] vio event {name}");
+        if let Some(s) = signal {
+            eprintln!("[soul][agent] vio signal {s:?}");
+            let f = self.on_signal.lock().clone();
+            if let Some(f) = f {
+                // Off the actor: the handler calls back into Vio.
+                std::thread::spawn(move || f(s));
+            }
+        }
+    }
+
+    /// Send `idle` now and wait (≤ 400 ms) until it went out: Soul is quitting.
+    pub fn shutdown(&self) {
+        self.set_soul_state("idle", "");
+        if self.has("setSoulState") {
+            std::thread::sleep(STATE_TICK * 2 + Duration::from_millis(200));
+        }
+    }
+}
+
+/// A handshake request before the main loop (`hello`, `subscribe`): its reply within 5 s.
+/// Events that arrive meanwhile (`windowFocus` right after `subscribe`) are kept in `early`.
+async fn handshake_call<S, R>(sink: &mut S, stream: &mut R, id: u64, msg: String, early: &mut Vec<Value>) -> Result<Value, String>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    R: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    sink.send(Message::Text(msg.into())).await.map_err(|_| "connection lost".to_string())?;
+    let wait = async {
+        while let Some(m) = stream.next().await {
+            match m {
+                Ok(Message::Text(t)) => {
+                    let Ok(v) = serde_json::from_str::<Value>(t.as_str()) else { continue };
+                    if v["type"] == json!("event") {
+                        early.push(v);
+                    } else if v["id"].as_u64() == Some(id) {
+                        return if v["ok"] == json!(true) {
+                            Ok(v["result"].clone())
+                        } else {
+                            Err(v["error"].as_str().unwrap_or("error").to_string())
+                        };
+                    }
+                }
+                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        Err("connection closed".to_string())
+    };
+    tokio::time::timeout(HELLO_TIMEOUT, wait).await.unwrap_or_else(|_| Err("no answer".into()))
 }
 
 static GLOBAL: OnceLock<Arc<Client>> = OnceLock::new();
@@ -316,6 +526,7 @@ static GLOBAL: OnceLock<Arc<Client>> = OnceLock::new();
 /// App startup: watch for Vio (connects only while the computer agent is enabled).
 pub fn init(app: &tauri::AppHandle, enabled: bool) {
     let Some(path) = discovery_path() else { return };
+    let handle = app.clone();
     let app = app.clone();
     let client = Client::start(
         path,
@@ -333,11 +544,130 @@ pub fn init(app: &tauri::AppHandle, enabled: bool) {
             }
         }),
     );
+    client.on_signal(Arc::new(move |s| crate::agent::browser::on_signal(&handle, s)));
     let _ = GLOBAL.set(client);
 }
 
 pub fn global() -> Option<Arc<Client>> {
     GLOBAL.get().cloned()
+}
+
+/// The client while Vio is connected and authorized.
+pub fn connected_client() -> Option<Arc<Client>> {
+    global().filter(|c| c.status().state == State::Connected)
+}
+
+/// Soul's state for the icon in Vio (idle / listening / thinking / speaking / acting); debounced,
+/// a no-op without Vio.
+pub fn soul_state(state: &str, text: &str) {
+    if let Some(c) = GLOBAL.get() {
+        c.set_soul_state(state, text);
+    }
+}
+
+/// Soul is quitting: the Vio icon goes back to idle.
+pub fn shutdown() {
+    if let Some(c) = connected_client() {
+        c.shutdown();
+    }
+}
+
+/// The page text for reading / summarizing: Vio's article extraction when it has it (main text
+/// without menus), else the whole page.
+pub fn read_page(c: &Client, tab: &str) -> Result<String, String> {
+    if c.has("getReadable") {
+        match c.call("getReadable", json!({ "tabId": tab })) {
+            Ok(r) if !text(&r, "text").is_empty() => {
+                let byline = text(&r, "byline");
+                let head = if byline.is_empty() { text(&r, "title") } else { format!("{} — {byline}", text(&r, "title")) };
+                return Ok(format!("{head}\n\n{}", text(&r, "text")));
+            }
+            Err(e) if is_forbidden(&e) || e == crate::platform::input::ABORTED => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(page_text(&c.call("getPage", json!({ "tabId": tab }))?))
+}
+
+/// Purple frame before a click (`highlight`), a short pause so the user sees it, the click,
+/// then `clearHighlight`. Without `highlight` (old Vio) just the click.
+pub fn click(c: &Client, tab: &str, r: &str, label: &str) -> Result<(), String> {
+    let lit = c.has("highlight") && c.call("highlight", json!({ "tabId": tab, "ref": r, "label": clip(label, 80) })).is_ok();
+    if lit {
+        super::killswitch::sleep(HIGHLIGHT_PAUSE);
+    }
+    let r = c.call("click", json!({ "tabId": tab, "ref": r })).map(|_| ());
+    if lit {
+        let _ = c.call("clearHighlight", json!({ "tabId": tab }));
+    }
+    r
+}
+
+const HIGHLIGHT_PAUSE: Duration = Duration::from_millis(350);
+
+/// `mediaControl` (`tab` `None` = the playing tab, else the active one). „no media element” gets
+/// an explanation: video in a cross-origin embed (an iframe from another site) is out of reach.
+pub fn media(c: &Client, tab: Option<&str>, action: &str, value: Option<f64>) -> Result<Value, String> {
+    let mut args = json!({ "action": action });
+    if let Some(t) = tab {
+        args["tabId"] = json!(t);
+    }
+    if let Some(v) = value {
+        args["value"] = json!(v);
+    }
+    c.call("mediaControl", args).map_err(|e| {
+        if e.contains("no media") {
+            "No video or audio Soul can control on this page (players embedded from another site, e.g. a YouTube embed, can't be controlled)."
+                .to_string()
+        } else {
+            e
+        }
+    })
+}
+
+/// `mediaControl`'s result in a few words.
+pub fn media_text(v: &Value) -> String {
+    let t = |s: f64| format!("{}:{:02}", (s.max(0.0) as u64) / 60, (s.max(0.0) as u64) % 60);
+    let at = v["currentTime"].as_f64().unwrap_or(0.0);
+    let dur = v["duration"].as_f64().unwrap_or(0.0);
+    format!(
+        "{} {}/{}{}",
+        if v["playing"] == json!(true) { "playing" } else { "paused" },
+        t(at),
+        t(dur),
+        if v["muted"] == json!(true) { ", muted" } else { "" }
+    )
+}
+
+/// `browser_tab` / voice tab commands on `tab`.
+pub fn tab_op(c: &Client, tab: &str, op: &str) -> Result<(), String> {
+    let (cmd, args) = match op {
+        "mute" | "unmute" => ("muteTab", json!({ "tabId": tab, "muted": op == "mute" })),
+        "pin" | "unpin" => ("pinTab", json!({ "tabId": tab, "pinned": op == "pin" })),
+        "back" => ("goBack", json!({ "tabId": tab })),
+        "forward" => ("goForward", json!({ "tabId": tab })),
+        "reopen" => ("reopenClosedTab", json!({})),
+        other => return Err(format!("Unknown tab operation {other}.")),
+    };
+    if !c.has(cmd) {
+        return Err("This Vio version can't do that (update Vio).".into());
+    }
+    c.call(cmd, args).map(|_| ())
+}
+
+/// History / bookmarks search: (entries, text for the model / Island).
+pub fn search(c: &Client, bookmarks: bool, query: &str) -> Result<(Vec<Value>, String), String> {
+    let cmd = if bookmarks { "searchBookmarks" } else { "searchHistory" };
+    if !c.has(cmd) {
+        return Err("This Vio version can't search history or bookmarks (update Vio).".into());
+    }
+    let list = c.call(cmd, json!({ "query": clip(query, 200), "limit": 10 }))?.as_array().cloned().unwrap_or_default();
+    let text = list
+        .iter()
+        .map(|e| format!("\"{}\" {}", crate::platform::ui::sanitize(&clip(&text(e, "title"), 80)), clip(&text(e, "url"), 120)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok((list, if text.is_empty() { "(nothing found)".into() } else { text }))
 }
 
 /// Vio is connected and authorized (voice routing of browser phrases).
@@ -636,6 +966,10 @@ fn focused_tab(platform: &dyn crate::platform::Platform) -> Option<(Arc<Client>,
     if !((w.pid != 0 && w.pid == c.pid()) || is_vio_process(&w.process)) {
         return None;
     }
+    // The focused field from events names the tab: no listTabs round trip.
+    if let TextRoute::Insert(tab) = c.context().text_route() {
+        return Some((c, tab));
+    }
     let (_, id) = active_tab(&c.call("listTabs", json!({})).ok()?)?;
     Some((c, id))
 }
@@ -651,6 +985,9 @@ pub fn insert_text(platform: &dyn crate::platform::Platform, text: &str) -> Opti
         return None;
     }
     let (c, tab) = focused_tab(platform)?;
+    if c.context().text_route() == TextRoute::Forbidden {
+        return Some(Err(forbidden_message(Lang::En, "forbidden: password field")));
+    }
     match c.call("insertText", json!({ "tabId": tab, "text": text })) {
         Ok(_) => {
             eprintln!("[soul][agent] text inserted via vio chars={}", text.chars().count());
@@ -868,6 +1205,84 @@ mod tests {
         }
         println!("observation:
 {}", snapshot(&tab, &els, None).observation());
+    }
+
+    /// Real running Vio, API v2: `cargo test --lib vio_v2_live_check -- --ignored --nocapture`.
+    /// Read-only on the user's pages (no click / fill / key): hello, events, article, find,
+    /// highlight, history, screenshot, the Soul icon states. Accept „Zezwól” in Vio if asked.
+    #[test]
+    #[ignore]
+    fn vio_v2_live_check() {
+        let path = discovery_path().expect("no config dir");
+        assert!(discover(&path).is_some(), "Vio API is off or Vio is not running ({})", path.display());
+        let c = Client::start(path, true, Box::new(|s| eprintln!("[live] status {:?}", s.state)));
+        let end = Instant::now() + AUTH_TIMEOUT + Duration::from_secs(5);
+        while c.status().state != State::Connected && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        c.wait_ready(Duration::from_secs(1)).expect("not connected");
+        let mut rows: Vec<(String, bool, String)> = Vec::new();
+        let mut row = |name: &str, r: Result<String, String>| {
+            let (ok, detail) = match r {
+                Ok(d) => (true, d),
+                Err(e) => (false, e),
+            };
+            rows.push((name.to_string(), ok, clip(&detail, 90)));
+        };
+        let caps = c.caps();
+        row("hello", caps.as_ref().map(|c| format!("api {} vio {} · {} commands · {} events", c.api_version, c.vio_version, c.commands.len(), c.events.len())).ok_or_else(|| "no capabilities (v1?)".into()));
+        std::thread::sleep(Duration::from_millis(800));
+        let ctx = c.context();
+        row("events subscribed", if ctx.live { Ok(format!("windowFocus={:?}", ctx.focused)) } else { Err("not subscribed".into()) });
+        // Only internal pages open (they are hidden): a test tab, closed again at the end.
+        let mut opened = None;
+        if active_tab(&c.call("listTabs", json!({})).unwrap_or_default()).is_none() {
+            opened = c.call("openTab", json!({ "url": "https://example.com" })).ok().and_then(|v| tab_key(&v["tabId"]));
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        let tabs = c.call("listTabs", json!({})).unwrap_or_default();
+        let Some((_, tab)) = active_tab(&tabs) else {
+            panic!("Vio has no normal tab open: listTabs={tabs}");
+        };
+        row("getReadable", read_page(&c, &tab).map(|t| format!("{} chars: {}", t.chars().count(), t.lines().next().unwrap_or(""))));
+        row("findInPage", c.call("findInPage", json!({ "tabId": tab, "text": "a" })).map(|v| format!("matches {}", v["matches"])));
+        row("stopFind", c.call("stopFind", json!({ "tabId": tab })).map(|_| "ok".into()));
+        let els = c.call("getElements", json!({ "tabId": tab })).unwrap_or_default();
+        let first = els.as_array().and_then(|a| a.iter().find_map(|e| tab_key(&e["ref"])));
+        match first {
+            Some(r) => {
+                row("highlight", c.call("highlight", json!({ "tabId": tab, "ref": r, "label": "Soul test" })).map(|_| "purple frame shown".into()));
+                std::thread::sleep(Duration::from_millis(700));
+                row("clearHighlight", c.call("clearHighlight", json!({ "tabId": tab })).map(|_| "ok".into()));
+            }
+            None => row("highlight", Err("no element on the page".into())),
+        }
+        row("searchHistory", search(&c, false, "a").map(|(l, _)| format!("{} hits", l.len())));
+        row("searchBookmarks", search(&c, true, "a").map(|(l, _)| format!("{} hits", l.len())));
+        row("screenshot", c.call("screenshot", json!({ "tabId": tab })).map(|v| format!("{}x{}", v["width"], v["height"])));
+        row("mediaControl pause", media(&c, Some(&tab), "pause", None).map(|v| media_text(&v)));
+        for s in ["listening", "thinking", "speaking", "acting", "idle"] {
+            c.set_soul_state(s, &format!("Soul test: {s}"));
+            std::thread::sleep(Duration::from_millis(600));
+        }
+        row("setSoulState", Ok("listening → thinking → speaking → acting → idle (watch the icon)".into()));
+        let ctx = c.context();
+        row("context", Ok(ctx.observation().unwrap_or_else(|| "(no events yet)".into())));
+        row("tabActivated / pageLoaded", ctx.tab.clone().map(|t| format!("active tab {t} \"{}\"", clip(&ctx.title, 40))).ok_or_else(|| "no tab event seen".into()));
+        if let Some(t) = opened {
+            row("closeTab", c.call("closeTab", json!({ "tabId": t })).map(|_| "test tab closed".into()));
+            std::thread::sleep(Duration::from_millis(500));
+            let back = c.call("reopenClosedTab", json!({}));
+            row("reopenClosedTab", back.as_ref().map(|v| format!("reopened {}", v["tabId"])).map_err(|e| e.clone()));
+            if let Some(again) = back.ok().and_then(|v| tab_key(&v["tabId"])) {
+                std::thread::sleep(Duration::from_millis(800));
+                let _ = c.call("closeTab", json!({ "tabId": again }));
+            }
+        }
+        println!("\n| check | ok | detail |\n|---|---|---|");
+        for (n, ok, d) in &rows {
+            println!("| {n} | {} | {d} |", if *ok { "PASS" } else { "FAIL" });
+        }
     }
 
     #[test]

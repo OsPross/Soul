@@ -10,6 +10,7 @@ mod dev_samples;
 mod island;
 mod memory;
 mod platform;
+mod price_watch;
 mod scenes;
 mod talk;
 mod timers;
@@ -84,6 +85,12 @@ struct ErrorLogPayload {
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<Settings, String> {
     load_settings(&app)
+}
+
+/// Settings → About: REST model calls today (read-only; Live voice is not counted).
+#[tauri::command]
+fn rest_usage_today() -> ai::usage::Usage {
+    ai::usage::current()
 }
 
 /// Memory changed: the commands session prompt lists remembered facts — reconfigure it now (in the
@@ -666,6 +673,7 @@ pub fn run() {
             agent::agent_get_config,
             agent::agent_save_config,
             agent::agent_vio_status,
+            rest_usage_today,
             agent::agent_default_blocklist,
             agent::agent_debug_log,
             agent::agent_clear_log,
@@ -755,6 +763,11 @@ pub fn run() {
             wake::init(app.handle(), &settings);
             // Vio browser API (idle until its automation.json appears).
             agent::computer::vio::init(app.handle(), agent::computer::config::load(app.handle()).enabled);
+            if let Ok(dir) = app.path().app_data_dir() {
+                ai::usage::init(dir);
+            }
+            // Price watches: page fetch + HTML parse every few hours, never a model call.
+            price_watch::start(app.handle());
             #[cfg(debug_assertions)]
             dev_transcript_watcher(app.handle().clone());
             app.state::<AppState>().voice.set_volume(settings.voice_volume);
@@ -894,6 +907,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             }
             "wake" => wake::toggle_from_tray(app),
             "quit" => {
+                agent::computer::vio::shutdown();
                 app.exit(0);
             }
             _ => {}
@@ -953,6 +967,9 @@ pub(crate) fn emit_overlay(
     }
     OVERLAY_GEN.fetch_add(1, Ordering::SeqCst);
     e2e::trace("overlay", serde_json::json!({ "state": state, "message": message }));
+    if let Some(vio_state) = agent::computer::vio_ctx::soul_state_for(state) {
+        agent::computer::vio::soul_state(vio_state, message.as_deref().unwrap_or(""));
+    }
     let settings = load_settings(app).unwrap_or_default();
     if settings.island_enabled {
         // The Island renders every state, including the Confirm/Cancel card for destructive tools.

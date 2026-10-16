@@ -65,7 +65,27 @@ pub enum BrowserOp {
     Navigate(String),
     ReadPage,
     GetElements,
+    // Vio API v2 (offered only when Vio announces the command).
+    /// Main text of the page (`getReadable`).
+    ReadArticle,
+    /// The visible part of the active tab as an image for the next turn.
+    Screenshot,
+    /// Highlight a text on the page (`next` = the following match); `None` = clear it.
+    Find { text: Option<String>, next: bool },
+    /// Scroll an element (id) or the first match of a text into view.
+    ScrollTo { text: Option<String>, target: Option<Target> },
+    /// `mediaControl` on the page's video / audio.
+    Media { action: String, value: Option<f64> },
+    /// mute / unmute / pin / unpin / reopen / back / forward.
+    Tab(String),
+    /// History (`bookmarks: false`) or bookmarks search; results as READ.
+    Search { bookmarks: bool, query: String },
 }
+
+/// `browser_media` actions (Vio's names).
+pub const MEDIA_ACTIONS: &[&str] = &["play", "pause", "toggle", "seek", "seekBy", "rate", "volume"];
+/// `browser_tab` operations.
+pub const TAB_OPS: &[&str] = &["mute", "unmute", "pin", "unpin", "reopen", "back", "forward"];
 
 /// A parsed function call.
 #[derive(Debug, Clone, PartialEq)]
@@ -90,7 +110,14 @@ impl Action {
                 | Self::ReadText(_)
                 | Self::Done(_)
                 | Self::AskUser(_)
-                | Self::Browser(BrowserOp::ListTabs | BrowserOp::ReadPage | BrowserOp::GetElements)
+                | Self::Browser(
+                    BrowserOp::ListTabs
+                        | BrowserOp::ReadPage
+                        | BrowserOp::GetElements
+                        | BrowserOp::ReadArticle
+                        | BrowserOp::Screenshot
+                        | BrowserOp::Search { .. }
+                )
         )
     }
 
@@ -100,7 +127,8 @@ impl Action {
             | Self::TypeText { target: Some(Target::Id(id)), .. }
             | Self::Scroll { target: Some(Target::Id(id)), .. }
             | Self::Select { target: Target::Id(id), .. }
-            | Self::Drag { from: Target::Id(id), .. } => Some(*id),
+            | Self::Drag { from: Target::Id(id), .. }
+            | Self::Browser(BrowserOp::ScrollTo { target: Some(Target::Id(id)), .. }) => Some(*id),
             Self::ReadText(id) => Some(*id),
             _ => None,
         }
@@ -114,6 +142,7 @@ impl Action {
             Self::ReadText(id) => vec![Target::Id(*id)],
             Self::Select { target, .. } => vec![*target],
             Self::FillMany(items) => items.iter().map(|i| Target::Id(i.id)).collect(),
+            Self::Browser(BrowserOp::ScrollTo { target: Some(t), .. }) => vec![*t],
             _ => Vec::new(),
         }
     }
@@ -238,6 +267,49 @@ pub fn parse(name: &str, args: &Value) -> Result<Decision, String> {
         "browser_navigate" => Action::Browser(BrowserOp::Navigate(super::vio::normalize_url(&need("url")?)?)),
         "browser_read_page" => Action::Browser(BrowserOp::ReadPage),
         "browser_get_elements" => Action::Browser(BrowserOp::GetElements),
+        "browser_read_article" => Action::Browser(BrowserOp::ReadArticle),
+        "browser_screenshot" => Action::Browser(BrowserOp::Screenshot),
+        "browser_find" => {
+            let stop = arg_bool(args, "stop");
+            let text = arg_str(args, "text").filter(|_| !stop);
+            if text.as_ref().is_some_and(|t| t.chars().count() > 500) {
+                return Err("browser_find: text longer than 500 characters".into());
+            }
+            if text.is_none() && !stop {
+                return Err("browser_find: give text (or stop=true)".into());
+            }
+            Action::Browser(BrowserOp::Find { text, next: arg_bool(args, "next") })
+        }
+        "browser_scroll_to" => {
+            let (text, target) = (arg_str(args, "text"), target(args, ""));
+            if text.is_none() && target.is_none() {
+                return Err("browser_scroll_to: give an element id or a text".into());
+            }
+            Action::Browser(BrowserOp::ScrollTo { text, target })
+        }
+        "browser_media" => {
+            let want = need("action")?;
+            let action = MEDIA_ACTIONS
+                .iter()
+                .find(|a| a.eq_ignore_ascii_case(&want))
+                .ok_or_else(|| format!("browser_media: action must be one of {}", MEDIA_ACTIONS.join(", ")))?;
+            let value = arg_num(args, "value").filter(|v| v.is_finite());
+            if matches!(*action, "seek" | "seekBy" | "rate" | "volume") && value.is_none() {
+                return Err(format!("browser_media: {action} needs a value"));
+            }
+            Action::Browser(BrowserOp::Media { action: action.to_string(), value })
+        }
+        "browser_tab" => {
+            let op = need("op")?.to_ascii_lowercase();
+            if !TAB_OPS.contains(&op.as_str()) {
+                return Err(format!("browser_tab: op must be one of {}", TAB_OPS.join(", ")));
+            }
+            Action::Browser(BrowserOp::Tab(op))
+        }
+        "browser_search" => Action::Browser(BrowserOp::Search {
+            bookmarks: arg_str(args, "source").is_some_and(|s| s.to_ascii_lowercase().starts_with("book")),
+            query: need("query")?,
+        }),
         other => return Err(format!("Unknown function '{other}'.")),
     };
     Ok(Decision {
@@ -340,6 +412,27 @@ pub fn describe(a: &Action, snap: &UiSnapshot, lang: Lang) -> String {
             BrowserOp::Open { .. } => tr(lang, "Przełączam kartę…", "Switching tabs…").to_string(),
             BrowserOp::ReadPage => tr(lang, "Czytam stronę…", "Reading the page…").to_string(),
             BrowserOp::GetElements => tr(lang, "Patrzę na stronę…", "Looking at the page…").to_string(),
+            BrowserOp::ReadArticle => tr(lang, "Czytam artykuł…", "Reading the article…").to_string(),
+            BrowserOp::Screenshot => tr(lang, "Robię zrzut karty…", "Taking a tab screenshot…").to_string(),
+            BrowserOp::Find { text: Some(q), .. } => {
+                let q = clip(q, 30);
+                tr(lang, format!("Szukam \u{201e}{q}\u{201d} na stronie…"), format!("Finding \u{201e}{q}\u{201d} on the page…"))
+            }
+            BrowserOp::Find { text: None, .. } => tr(lang, "Czyszczę wyszukiwanie…", "Clearing the search…").to_string(),
+            BrowserOp::ScrollTo { text, target } => {
+                let what = text.as_deref().map(|q| format!("\u{201e}{}\u{201d}", clip(q, 30))).or_else(|| target.as_ref().map(t)).unwrap_or_default();
+                tr(lang, format!("Przewijam do {what}…"), format!("Scrolling to {what}…"))
+            }
+            BrowserOp::Media { action, .. } => tr(lang, format!("Odtwarzacz: {action}…"), format!("Player: {action}…")),
+            BrowserOp::Tab(op) => tr(lang, format!("Karta: {op}…"), format!("Tab: {op}…")),
+            BrowserOp::Search { bookmarks: true, query } => {
+                let q = clip(query, 30);
+                tr(lang, format!("Szukam w zakładkach \u{201e}{q}\u{201d}…"), format!("Searching bookmarks for \u{201e}{q}\u{201d}…"))
+            }
+            BrowserOp::Search { query, .. } => {
+                let q = clip(query, 30);
+                tr(lang, format!("Szukam w historii \u{201e}{q}\u{201d}…"), format!("Searching history for \u{201e}{q}\u{201d}…"))
+            }
         },
     }
 }
@@ -401,6 +494,22 @@ pub fn history_line(d: &Decision, snap: &UiSnapshot) -> String {
             BrowserOp::Navigate(u) => format!("browser_navigate {}", clip(u, 80)),
             BrowserOp::ReadPage => "browser_read_page".into(),
             BrowserOp::GetElements => "browser_get_elements".into(),
+            BrowserOp::ReadArticle => "browser_read_article".into(),
+            BrowserOp::Screenshot => "browser_screenshot".into(),
+            BrowserOp::Find { text: Some(q), next } => format!("browser_find \"{}\"{}", clip(q, 60), if *next { " next" } else { "" }),
+            BrowserOp::Find { text: None, .. } => "browser_find stop".into(),
+            BrowserOp::ScrollTo { text, target } => format!(
+                "browser_scroll_to{}{}",
+                text.as_deref().map(|q| format!(" \"{}\"", clip(q, 60))).unwrap_or_default(),
+                target.as_ref().map(|x| format!(" {}", t(x))).unwrap_or_default()
+            ),
+            BrowserOp::Media { action, value } => {
+                format!("browser_media {action}{}", value.map(|v| format!(" {v}")).unwrap_or_default())
+            }
+            BrowserOp::Tab(op) => format!("browser_tab {op}"),
+            BrowserOp::Search { bookmarks, query } => {
+                format!("browser_search {} \"{}\"", if *bookmarks { "bookmarks" } else { "history" }, clip(query, 60))
+            }
         },
     }
 }
@@ -472,6 +581,30 @@ mod tests {
         assert!(parse("browser_scroll", &json!({ "direction": "left" })).is_err());
         assert!(parse("browser_click", &json!({})).is_err());
         assert!(!parse("browser_read_page", &json!({})).unwrap().action.acts());
+        // v2
+        assert_eq!(parse("browser_read_article", &json!({})).unwrap().action, Action::Browser(BrowserOp::ReadArticle));
+        assert!(!parse("browser_screenshot", &json!({})).unwrap().action.acts());
+        assert_eq!(
+            parse("browser_find", &json!({ "text": "cena", "next": true })).unwrap().action,
+            Action::Browser(BrowserOp::Find { text: Some("cena".into()), next: true })
+        );
+        assert_eq!(parse("browser_find", &json!({ "stop": true })).unwrap().action, Action::Browser(BrowserOp::Find { text: None, next: false }));
+        assert!(parse("browser_find", &json!({})).is_err());
+        let d = parse("browser_scroll_to", &json!({ "id": 4 })).unwrap();
+        assert_eq!(d.action.target_id(), Some(4), "an id target is validated like a click");
+        assert!(parse("browser_scroll_to", &json!({})).is_err());
+        assert_eq!(
+            parse("browser_media", &json!({ "action": "SEEKBY", "value": -10 })).unwrap().action,
+            Action::Browser(BrowserOp::Media { action: "seekBy".into(), value: Some(-10.0) })
+        );
+        assert!(parse("browser_media", &json!({ "action": "rate" })).is_err());
+        assert!(parse("browser_media", &json!({ "action": "eject" })).is_err());
+        assert_eq!(parse("browser_tab", &json!({ "op": "Back" })).unwrap().action, Action::Browser(BrowserOp::Tab("back".into())));
+        assert!(parse("browser_tab", &json!({ "op": "close_all" })).is_err());
+        assert_eq!(
+            parse("browser_search", &json!({ "source": "bookmarks", "query": "bank" })).unwrap().action,
+            Action::Browser(BrowserOp::Search { bookmarks: true, query: "bank".into() })
+        );
         assert!(parse("browser_navigate", &json!({ "url": "https://example.com" })).unwrap().action.acts());
     }
 

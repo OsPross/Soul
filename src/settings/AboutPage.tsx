@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import Markdown from "react-markdown";
@@ -54,6 +54,12 @@ export default function AboutPage({ lang }: { lang: UiLang }) {
   const anim = useAnim();
   const s = useUpdate();
   const [actionError, setActionError] = useState<string | null>(null);
+  const [restCalls, setRestCalls] = useState<number | null>(null);
+  useEffect(() => {
+    invoke<{ count: number }>("rest_usage_today")
+      .then((u) => setRestCalls(u.count))
+      .catch(() => setRestCalls(null));
+  }, []);
 
   if (!s) {
     return <p className="text-[12px] text-[var(--soul-muted)]">{tr(lang, "Ładuję…", "Loading…")}</p>;
@@ -87,6 +93,16 @@ export default function AboutPage({ lang }: { lang: UiLang }) {
           )}
         >
           <Button onClick={() => run(invoke("update_open_release"))}>{tr(lang, "Wydania na GitHub", "Releases on GitHub")}</Button>
+        </Row>
+        <Row
+          label={tr(lang, "Zapytania REST AI dziś", "REST AI calls today")}
+          hint={tr(
+            lang,
+            "Tylko na Twoją prośbę (Circle-to-Ask, agent, streszczenia, zapasowe rozpoznawanie mowy) — nic w tle. Rozmowa głosowa (Live) nie jest liczona.",
+            "Only when you ask (Circle-to-Ask, agent, summaries, speech fallback) — nothing in the background. Live voice is not counted.",
+          )}
+        >
+          <span className="font-mono text-[13px] text-white/90">{restCalls ?? "—"}</span>
         </Row>
       </Card>
 

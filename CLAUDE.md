@@ -86,9 +86,20 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   `vio::elements_of` lists a page with form fields whole (`getElements {all:true}`, `offscreen` in the observation).
   Dictation, the `type_text` tool and `text_action` go through `vio::paste_text` / `vio::read_selection` (`insertText` /
   `getSelection`, no clipboard) when Vio is connected and in front, else the platform clipboard path; a password field is never bypassed.
+  API v2 (`vio_ctx.rs`, pure): after auth `hello` → `Caps` (every v2 feature is gated on `Client::has`; a v1 Vio keeps the old
+  behaviour), `subscribe` to the announced events → `BrowserCtx` (active tab, focus, selection, focused field, media; the
+  BROWSER line inside `<screen>`, dictation `TextRoute`), `Signal`s (Soul icon → `wake::listen_hands_free`, panel buttons,
+  STOP → `agent::browser::stop_all`), debounced `setSoulState` (`StateGate`, fed by `emit_overlay` / `clear_assistant` /
+  agent progress = `acting`), „stopped by user” = aborted, `cancel_all`, connect backoff 2 → 30 s. v2 agent tools:
+  `browser_read_article` / `_screenshot` / `_find` / `_scroll_to` / `_media` / `_tab` / `_search`; `vio::click` highlights first.
+  `agent/browser.rs` – browser voice commands without a model (`parse` fuzzy, `applies` = capability / focus / media gates,
+  `route` runs in `local_route` and makes `is_computer_task` false); tool `browser {op}`; „stop” / „przestań” = `stop_all`.
   Platform: `platform/ui.rs` (snapshot model, `finalize`, observation text), `coords.rs`, `input.rs` (`execute` always
   releases keys), `marks.rs` (set-of-marks JPEG), `windows_uia.rs` (UIA worker thread owns all COM objects),
   `linux_atspi.rs` (AT-SPI + enigo, untested on a real desktop), Wayland refuses. Harness: `npm run test:agent [-- --real]`.
+- `price_watch.rs` – „obserwuj cenę”: memory-DB table `price_watches`, page fetched by Soul (no AI, no Vio tab), price from
+  shop metadata or the text after remembered words, checker thread every 3 h → toast + `speak_notice`. Tab scenes reuse
+  `scenes.rs` (`open_url` steps). `ai/usage.rs` – REST `generateContent` calls per day (`rest_usage_today`, Settings → About).
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
   a changed prompt reconnects it, so call `memory_changed` after edits). Refuses secrets; `extract_fact` = auto-remember.
@@ -260,7 +271,7 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
 ## Logging conventions
 
 - Rust logs use `eprintln!("[soul][module] message")`, where `module` is lowercase and matches the area:
-  `agent`, `ask`, `audio`, `dictation`, `gemini`, `hook`, `island`, `live`, `memory`, `platform`, `quota`, `scene`, `sfx`, `timer`,
+  `agent`, `ask`, `audio`, `dictation`, `gemini`, `hook`, `island`, `live`, `memory`, `platform`, `price`, `quota`, `scene`, `sfx`, `timer`,
   `update`, `voice`, `wake`, `watchdog`, `error`.
   Reuse an existing tag; add a new one only for a new subsystem.
 - Verbose/noisy diagnostics go through `soul_debug!` (needs `SOUL_DEBUG=1`).

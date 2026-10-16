@@ -151,6 +151,9 @@ impl Host for AppHost {
         if p.phase == Phase::Running {
             let _ = crate::emit_overlay(&self.app, "thinking", Some(format!("{} · {}/{}", p.text, p.step, p.max)));
         }
+        // After the overlay state: while the task runs Vio shows „acting” (and its STOP button).
+        let acting = matches!(p.phase, Phase::Running | Phase::Confirm | Phase::Asking);
+        super::vio::soul_state(if acting { "acting" } else { "idle" }, if acting { &p.text } else { "" });
     }
 
     fn confirm(&self, question: &str) -> bool {

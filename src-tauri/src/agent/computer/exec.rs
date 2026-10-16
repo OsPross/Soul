@@ -40,6 +40,8 @@ pub struct Performed {
     pub detail: String,
     /// `read_text` result for the next observation.
     pub read: Option<String>,
+    /// Vio tab screenshot (JPEG) for the next observation.
+    pub shot: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,9 +363,7 @@ fn fill_field(cx: &Cx, c: &vio::Client, tab: &str, id: u32, value: &FillValue) -
     match vio::fill_plan(e, value) {
         vio::FillPlan::Skip(why) => return Ok(Some(why)),
         vio::FillPlan::AlreadySet => {}
-        vio::FillPlan::Click => {
-            c.call("click", json!({ "tabId": tab, "ref": r }))?;
-        }
+        vio::FillPlan::Click => vio::click(c, tab, r, &e.display_name())?,
         vio::FillPlan::Select(want) => {
             let mut args = vio::select_args(e, &want);
             args["tabId"] = json!(tab);
@@ -403,7 +403,7 @@ fn fill_many(cx: &Cx, c: &vio::Client, tab: &str, items: &[FillItem]) -> Result<
     killswitch::sleep(VIO_SETTLE);
     let done = items.len() - failed.len();
     let detail = if failed.is_empty() { format!(" — {done}/{} fields set", items.len()) } else { format!(" — {done}/{} fields set; {}", items.len(), failed.join("; ")) };
-    Ok(Performed { verified: done > 0, detail, read: None })
+    Ok(Performed { verified: done > 0, detail, read: None, shot: None })
 }
 
 /// A Vio step: the API call is the action and its `ok` the verification (no settle polling).
@@ -418,14 +418,16 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
         c.call("pressKey", json!({ "tabId": tab, "key": k })).map(|_| ())
     };
     let mut read = None;
+    let mut shot = None;
     let mut detail = String::new();
     match &d.action {
         Action::Click { target, button: MouseButton::Left, count: 1 } => {
-            c.call("click", json!({ "tabId": tab, "ref": vref(target)? }))?;
+            let label = super::action::target_label(target, cx.snap);
+            vio::click(c, tab, &vref(target)?, label.trim_matches(['\u{201e}', '\u{201d}']))?;
         }
         Action::TypeText { target: Some(Target::Id(id)), text, submit, .. } => {
             if let Some(why) = fill_field(cx, c, tab, *id, &FillValue::Text(text.clone()))? {
-                return Ok(Performed { verified: true, detail: format!(" — NOT filled: {why}"), read: None });
+                return Ok(Performed { verified: true, detail: format!(" — NOT filled: {why}"), read: None, shot: None });
             }
             if *submit {
                 killswitch::sleep(Duration::from_millis(80));
@@ -434,7 +436,7 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
         }
         Action::Select { target: Target::Id(id), option } => {
             if let Some(why) = fill_field(cx, c, tab, *id, &FillValue::Option(option.clone()))? {
-                return Ok(Performed { verified: true, detail: format!(" — NOT selected: {why}"), read: None });
+                return Ok(Performed { verified: true, detail: format!(" — NOT selected: {why}"), read: None, shot: None });
             }
         }
         Action::FillMany(items) => return fill_many(cx, c, tab, items),
@@ -457,6 +459,33 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
             }
             BrowserOp::ReadPage => read = Some(vio::page_text(&c.call("getPage", json!({ "tabId": tab }))?)),
             BrowserOp::GetElements => detail = " (the list is refreshed every turn)".into(),
+            BrowserOp::ReadArticle => read = Some(vio::read_page(c, tab)?),
+            BrowserOp::Screenshot => {
+                let v = c.call("screenshot", json!({ "tabId": tab }))?;
+                shot = Some(png_to_jpeg(v["pngBase64"].as_str().unwrap_or_default())?);
+                detail = " (image attached to the next turn)".into();
+            }
+            BrowserOp::Find { text: Some(q), next } => {
+                let v = c.call("findInPage", json!({ "tabId": tab, "text": q, "next": next }))?;
+                detail = format!(" — {} matches", v["matches"].as_u64().unwrap_or(0));
+            }
+            BrowserOp::Find { text: None, .. } => {
+                c.call("stopFind", json!({ "tabId": tab }))?;
+            }
+            BrowserOp::ScrollTo { text, target } => {
+                let args = match (target, text) {
+                    (Some(t), _) => json!({ "tabId": tab, "ref": vref(t)? }),
+                    (None, Some(q)) => json!({ "tabId": tab, "text": q }),
+                    (None, None) => return Err("browser_scroll_to: give an element id or a text".into()),
+                };
+                c.call("scrollTo", args)?;
+            }
+            BrowserOp::Media { action, value } => {
+                let v = vio::media(c, Some(tab), action, *value)?;
+                detail = format!(" — {}", vio::media_text(&v));
+            }
+            BrowserOp::Tab(op) => vio::tab_op(c, tab, op)?,
+            BrowserOp::Search { bookmarks, query } => read = Some(vio::search(c, *bookmarks, query)?.1),
         },
         Action::OpenUrl(u) => {
             vio::open_tab(c, cx.platform.as_ref(), u)?;
@@ -471,7 +500,21 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Perf
         // Let the page react before the next getElements (navigation renews the refs).
         killswitch::sleep(VIO_SETTLE);
     }
-    Ok(Performed { verified: true, detail, read })
+    Ok(Performed { verified: true, detail, read, shot })
+}
+
+/// Vio's PNG of the tab → the JPEG the prompt takes (≤ 1280 px).
+fn png_to_jpeg(b64: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let png = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|e| format!("screenshot: {e}"))?;
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| format!("screenshot: {e}"))?;
+    let max = crate::platform::marks::MAX_SIDE;
+    let img = if img.width() > max || img.height() > max { img.thumbnail(max, max) } else { img };
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, crate::platform::marks::JPEG_QUALITY)
+        .encode_image(&img.to_rgb8())
+        .map_err(|e| format!("screenshot: {e}"))?;
+    Ok(out)
 }
 
 /// Poll the cheap state until it is stable (or 2 s). Returns the last state.
@@ -535,11 +578,11 @@ pub fn perform(cx: &Cx, d: &Decision, confirmed: bool) -> Result<Performed, Stri
         Action::ReadText(id) => {
             let e = cx.snap.get(*id).ok_or("No such element.")?;
             let text = if e.password { String::new() } else { e.value.clone().filter(|v| !v.is_empty()).unwrap_or_else(|| e.name.clone()) };
-            return Ok(Performed { verified: true, detail: String::new(), read: Some(text) });
+            return Ok(Performed { verified: true, detail: String::new(), read: Some(text), shot: None });
         }
         Action::Wait(ms) => {
             killswitch::sleep(Duration::from_millis(*ms as u64));
-            return Ok(Performed { verified: true, detail: String::new(), read: None });
+            return Ok(Performed { verified: true, detail: String::new(), read: None, shot: None });
         }
         _ => {}
     }
@@ -566,7 +609,7 @@ pub fn perform(cx: &Cx, d: &Decision, confirmed: bool) -> Result<Performed, Stri
     let ok = verified(&d.action, changed, before.as_ref(), after.as_ref());
     eprintln!("[soul][agent] computer exec {} via={} changed={changed} verified={ok}", d.name, first.used);
     if ok {
-        return Ok(Performed { verified: true, detail: window_note(after.as_ref()), read: None });
+        return Ok(Performed { verified: true, detail: window_note(after.as_ref()), read: None, shot: None });
     }
     // Retry once with the other strategy — only when nothing changed at all, and never for an
     // action the user confirmed or the model flagged (it may have worked invisibly).
@@ -595,6 +638,7 @@ pub fn perform(cx: &Cx, d: &Decision, confirmed: bool) -> Result<Performed, Stri
                         " — nothing changed, also after a retry".into()
                     },
                     read: None,
+                    shot: None,
                 });
             }
         }
@@ -603,6 +647,7 @@ pub fn perform(cx: &Cx, d: &Decision, confirmed: bool) -> Result<Performed, Stri
         verified: false,
         detail: if changed { " — the screen changed but not as expected".into() } else { " — nothing changed".into() },
         read: None,
+        shot: None,
     })
 }
 

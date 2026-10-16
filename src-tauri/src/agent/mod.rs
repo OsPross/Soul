@@ -1,6 +1,7 @@
 //! Voice-command agent mode: hold hotkey → transcript → pre-router / Gemini tools → Platform.
 //! Replies are spoken through the Live session's native audio (see `voice.rs`).
 
+pub(crate) mod browser;
 mod chain;
 pub(crate) mod computer;
 pub(crate) mod confirm;
@@ -15,6 +16,7 @@ pub(crate) use router::fold_word;
 use crate::ai::gemini::{
     agent_tool_declarations, build_agent_body_with_context, extract_function_calls,
     extract_model_content, extract_text_from_value, GeminiClient, SOUL_DONE_MARKER,
+    SOUL_READ_MARKER,
 };
 use chain::MAX_ACTIONS;
 use crate::ai::live::{self, merge_transcript, LiveEvent, LiveFunctionCall, LivePool, TurnEvent};
@@ -166,6 +168,10 @@ pub fn classify_smart(
     if computer::intent::is_explicit_ui_command(text) || computer::intent::is_read_page_task(text) {
         return command("computer-task");
     }
+    // „znajdź na stronie …”, „wycisz kartę”, „pauza” on a Vio video: only when Vio can do it now.
+    if browser::route(text).is_some() && text_field_focused() != Some(true) {
+        return command("browser");
+    }
     if context::is_reset_phrase(text) {
         return command("context-reset");
     }
@@ -186,7 +192,8 @@ fn part_is_command(part: &str, scenes: bool) -> bool {
         || (scenes && crate::scenes::match_trigger(part).is_some())
 }
 
-/// Deterministic routing: user scene triggers first, then the Polish/English pre-router.
+/// Deterministic routing: user scene triggers first, then browser commands Vio can do now, then
+/// the Polish/English pre-router.
 fn local_route(text: &str) -> Option<router::PreRoute> {
     if let Some(scene) = crate::scenes::match_trigger(text) {
         return Some(router::PreRoute {
@@ -195,7 +202,7 @@ fn local_route(text: &str) -> Option<router::PreRoute> {
             reason: "scene-trigger".into(),
         });
     }
-    router::match_command(text)
+    browser::route(text).or_else(|| router::match_command(text))
 }
 
 /// Auto-remember: a durable fact stated in a command is saved with an undo chip on the Island.
@@ -232,8 +239,19 @@ fn auto_remember(app: &AppHandle, text: &str) {
 
 /// Speak a short notice (timer finished…) through the Live voice when Soul is idle.
 pub fn speak_notice(app: &AppHandle, text: &str) {
+    speak_turn(app, format!("{SOUL_DONE_MARKER} notification for the user: {text}"), text);
+}
+
+/// Read page text aloud (the user asked: „przeczytaj artykuł”) through the Live voice when idle.
+pub fn read_aloud(app: &AppHandle, text: &str) {
+    let head: String = text.chars().take(200).collect();
+    speak_turn(app, format!("{SOUL_READ_MARKER}\n<<<\n{text}\n>>>"), &head);
+}
+
+/// One spoken Live text turn; late tool calls in it are answered as skipped, never run.
+fn speak_turn(app: &AppHandle, prompt: String, shown: &str) {
     let app = app.clone();
-    let text = text.to_string();
+    let text = shown.to_string();
     thread::spawn(move || {
         let Some(state) = app.try_state::<AppState>() else {
             return;
@@ -250,9 +268,7 @@ pub fn speak_notice(app: &AppHandle, text: &str) {
         }
         let live = Arc::clone(&state.live);
         live.commands.configure(live::commands_setup(&settings));
-        let (rx, id) = live
-            .commands
-            .begin_text_turn(&format!("{SOUL_DONE_MARKER} notification for the user: {text}"));
+        let (rx, id) = live.commands.begin_text_turn(&prompt);
         let mut voice = Voice::new(&app, Instant::now());
         voice.fallback_text = text.clone();
         *state.agent.speaking_turn.lock() = Some(id);
@@ -392,6 +408,12 @@ fn local_dispatch(
     if text.is_empty() {
         return None;
     }
+    // „stop” / „przestań”: the same kill switch as Vio's STOP; with nothing running, „stop”
+    // keeps its old meaning (media pause via the pre-router).
+    if browser::is_stop(text) && browser::stop_all(app, "głos") {
+        crate::e2e::trace("tool", json!({ "name": "stop", "args": {}, "ok": true }));
+        return Some(Local { result: Ok(browser::STOPPED.into()), summary: String::new(), speak: false });
+    }
     if context::is_reset_phrase(text) {
         context::clear(app);
         crate::e2e::trace("tool", json!({ "name": "context_reset", "args": {}, "ok": true }));
@@ -444,8 +466,8 @@ fn local_dispatch(
     let result = run_route(app, platform, &route);
     Some(Local {
         summary: route_summary(&route, &result),
+        speak: !browser::is_quiet(&route),
         result,
-        speak: true,
     })
 }
 
@@ -1854,6 +1876,7 @@ fn run_tool(
         }
         "now_playing" => Ok(now_playing_text()),
         "morning_briefing" => Ok(morning_briefing()),
+        browser::TOOL => browser::run(app, platform, args),
         other => Err(format!("Unknown tool '{other}' (not allowed).")),
     }
 }

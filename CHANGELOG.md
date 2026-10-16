@@ -21,6 +21,23 @@ changelog shown in Settings → O aplikacji / About.
   fields, and sees fields below the fold without scrolling. Dictation and „popraw / przetłumacz to”
   in Vio now insert text with Vio's own API instead of borrowing the clipboard.
 
+- **Vio API v2.** Soul says `hello` to Vio, follows its events (active tab, focus, selection, focused
+  field, playing media) and shows its state on the Soul icon in Vio (listening / thinking / speaking /
+  acting). Clicking the icon starts listening; **STOP** in Vio stops everything at once (agent, voice,
+  waiting browser commands). New voice commands, no model needed: „przeczytaj artykuł”, „znajdź na
+  stronie X”, „przewiń do X”, „pauza” / „graj” / „przewiń o 30 sekund” / „szybciej” / „wolniej” /
+  „głośniej” / „ciszej” on a Vio video, „wycisz / przypnij kartę”, „przywróć zamkniętą kartę”, „wstecz”,
+  „dalej”, „znajdź w historii X”, „otwórz zakładkę X”, „stop”. The agent gets article reading, tab
+  screenshots, find / scroll to, media, tab and history / bookmark tools, and frames the element in
+  purple before every click. Older Vio versions keep working as before.
+- **Price watches.** „Obserwuj cenę tej strony” — Soul checks the page every 3 hours by itself (no AI, no
+  hidden browser tab) and tells you when the price drops; „pokaż obserwowane ceny”, „przestań obserwować
+  cenę …”.
+- **Tab scenes.** „Zapisz scenę praca” saves the open Vio tabs, „otwórz scenę praca” brings them back,
+  „usuń scenę praca” deletes it.
+- **REST AI counter.** Settings → O aplikacji shows how many REST AI calls Soul made today, so you can
+  see nothing runs AI in the background.
+
 ### Fixed
 
 - Voice fixes found by the new end-to-end voice test suite:

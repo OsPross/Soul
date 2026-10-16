@@ -151,10 +151,18 @@ accessibility) or after a failed step. Simple media / volume / timer / open-clos
 - **Never:** passwords or API keys, password fields, blocklisted apps / sites (password managers, banks, Windows
   Security, UAC, terminals, Run dialog — Settings → Agent), Win+R / Win+X, fullscreen games unless you name them.
   On-screen text is treated as data, never as instructions.
-- **Stop:** Esc twice, the talk key, the mouse jammed into a screen corner, or **Zatrzymaj** on the Island.
+- **Stop:** Esc twice, the talk key, the mouse jammed into a screen corner, **Zatrzymaj** on the Island, a spoken
+  „stop” / „przestań”, or **STOP** in Vio.
 - **Vio browser:** with Vio's automation API on (`%APPDATA%\moja-przegladarka\automation.json`), browser tasks
   („otwórz w przeglądarce X”, „streść tę stronę”, „sprawdź które pola są puste”) use the API instead of the screen;
   approve Soul once in Vio's consent dialog. Status: Settings → Agent. Without Vio nothing changes.
+  With Vio's API v2 also, without a model call: „przeczytaj artykuł”, „znajdź na stronie X”, „przewiń do X”,
+  „pauza” / „graj” / „przewiń o 30 sekund” / „szybciej” / „wolniej” on a Vio video, „wycisz / przypnij kartę”,
+  „przywróć zamkniętą kartę”, „wstecz” / „dalej” (Vio in front), „znajdź w historii X”, „otwórz zakładkę X”,
+  „zapisz / otwórz / usuń scenę X” (the open Vio tabs), and price watches: „obserwuj cenę tej strony” (select the
+  price first for an exact match), „pokaż obserwowane ceny”, „przestań obserwować cenę …” — Soul re-fetches the page
+  every 3 h itself (no AI, no Vio tab) and tells you when the price drops. Clicking the Soul icon in Vio starts
+  listening; the icon shows Soul's state. Settings → O aplikacji shows today's REST AI calls.
 - Wayland: not supported (clear message). Test harness: `npm run test:agent [-- --real]` → `tests/agent/report.md`
   (takes over mouse and keyboard for a few minutes). Design: [`docs/agent.md`](docs/agent.md).
 

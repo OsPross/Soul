@@ -382,6 +382,7 @@ pub fn set_activity(activity: Activity) {
 }
 
 pub fn clear_assistant(app: &AppHandle) {
+    crate::agent::computer::vio::soul_state("idle", "");
     {
         let mut rt = runtime().lock();
         rt.assistant = None;

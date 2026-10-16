@@ -366,7 +366,7 @@ fn unit_seconds(w: &str) -> Option<u64> {
     }
 }
 
-fn number_word(w: &str) -> Option<u64> {
+pub(super) fn number_word(w: &str) -> Option<u64> {
     Some(match w {
         "jeden" | "jedna" | "jedno" | "one" => 1,
         "dwa" | "dwie" | "two" => 2,

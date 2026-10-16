@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Soul E2E – Odtwarzacz</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; margin: 24px auto; max-width: 640px; padding: 0 16px; color: #222; }
+  #state { font-family: monospace; }
+</style>
+</head>
+<body>
+<h1>Test odtwarzacza</h1>
+<p>Cichy dźwięk testowy (60 s, wyciszony autoplay) dla komend „pauza”, „przewiń o 30 sekund”, „szybciej”.</p>
+<audio id="player" controls loop autoplay muted></audio>
+<p>Stan: <span id="state">pauza 0:00</span></p>
+<script>
+  // 60 s of a quiet 220 Hz tone as a WAV blob (no network); muted autoplay starts it, so Vio reports it.
+  const rate = 8000, secs = 60, n = rate * secs;
+  const buf = new ArrayBuffer(44 + n);
+  const v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + n, true); str(8, "WAVEfmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate, true);
+  v.setUint16(32, 1, true); v.setUint16(34, 8, true); str(36, "data"); v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128 + Math.round(6 * Math.sin((2 * Math.PI * 220 * i) / rate)));
+  const player = document.getElementById("player");
+  player.src = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  const show = () => {
+    const t = Math.floor(player.currentTime);
+    document.getElementById("state").textContent =
+      `${player.paused ? "pauza" : "gra"} ${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")} ×${player.playbackRate}`;
+  };
+  ["play", "pause", "timeupdate", "ratechange", "seeked"].forEach((e) => player.addEventListener(e, show));
+</script>
+</body>
+</html>
