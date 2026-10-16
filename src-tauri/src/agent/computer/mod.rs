@@ -290,11 +290,11 @@ impl Run<'_> {
         Some((Arc::clone(c), fg))
     }
 
-    /// Active tab + its elements as a snapshot.
-    fn vio_snapshot(&self, c: &vio::Client, window: Option<crate::platform::ui::WindowInfo>) -> Result<(UiSnapshot, i64), String> {
+    /// Active tab + its elements as a snapshot. A sleeping (discarded) tab is woken first.
+    fn vio_snapshot(&self, c: &vio::Client, window: Option<crate::platform::ui::WindowInfo>) -> Result<(UiSnapshot, String), String> {
         let tabs = c.call("listTabs", serde_json::json!({}))?;
         let (tab, id) = vio::active_tab(&tabs).ok_or("Vio has no open tab.")?;
-        let elements = c.call("getElements", serde_json::json!({ "tabId": id }))?;
+        let elements = vio::elements_of(c, &id)?;
         Ok((vio::snapshot(&tab, &elements, window), id))
     }
 
@@ -571,7 +571,7 @@ impl Run<'_> {
                     region,
                     monitors: &self.monitors,
                     highlight: self.cfg.highlight,
-                    vio: vio.as_ref().map(|(c, _)| c.as_ref()).zip(tab),
+                    vio: vio.as_ref().map(|(c, _)| c.as_ref()).zip(tab.as_deref()),
                 },
                 &decision,
                 confirmed,

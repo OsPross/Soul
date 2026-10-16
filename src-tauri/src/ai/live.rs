@@ -133,6 +133,12 @@ impl LiveSetup {
         self
     }
 
+    /// Pin the input transcription languages (`inputAudioTranscription.languageCodes`, commands).
+    pub fn with_input_languages(mut self, language: &str) -> Self {
+        self.language_codes = language_codes(language);
+        self
+    }
+
     fn setup_message(&self, resume_handle: Option<&str>) -> Value {
         // Manual VAD: the hotkey defines the turn boundaries.
         let realtime = json!({ "automaticActivityDetection": { "disabled": true } });
@@ -157,6 +163,11 @@ impl LiveSetup {
             LiveKind::Commands => {
                 // Native-audio Live models answer in AUDIO (24 kHz PCM): spoken replies are
                 // played by `voice::VoicePlayer`; tool calls + output transcription drive the UI.
+                // Pinned input languages: unpinned, the model hears Polish as Slovak/Spanish/Italian.
+                let mut tx = json!({});
+                if !self.language_codes.is_empty() {
+                    tx["languageCodes"] = json!(self.language_codes);
+                }
                 let mut s = json!({
                     "model": format!("models/{}", self.model),
                     "generationConfig": {
@@ -164,7 +175,7 @@ impl LiveSetup {
                         "temperature": 0.0
                     },
                     "realtimeInputConfig": realtime,
-                    "inputAudioTranscription": {},
+                    "inputAudioTranscription": tx,
                     "outputAudioTranscription": {},
                     "contextWindowCompression": { "slidingWindow": {} },
                     "sessionResumption": match resume_handle {
@@ -425,6 +436,7 @@ pub fn commands_setup(settings: &Settings) -> LiveSetup {
         &settings.voice_name,
     )
     .with_speech_language(&crate::ai::gemini::speech_language_code(&settings.language))
+    .with_input_languages(&settings.language)
 }
 
 struct Turn {
@@ -1156,12 +1168,17 @@ fn parse_function_calls(tc: &Value) -> Vec<LiveFunctionCall> {
 
 async fn connect(setup: &LiveSetup, resume_handle: Option<&str>) -> Result<Ws, String> {
     match connect_once(setup, resume_handle).await {
-        Err(e) if setup.speech_language.is_some() && e.to_ascii_lowercase().contains("language") => {
-            // Some native-audio models pick the language themselves and reject languageCode;
-            // the system instruction still pins the reply language.
-            eprintln!("[soul][live] speechConfig.languageCode rejected — retrying without it");
+        Err(e)
+            if setup.kind == LiveKind::Commands
+                && (setup.speech_language.is_some() || !setup.language_codes.is_empty())
+                && e.to_ascii_lowercase().contains("language") =>
+        {
+            // Some native-audio models pick the language themselves and reject languageCode(s);
+            // the system instruction still pins the language.
+            eprintln!("[soul][live] language codes rejected — retrying without them");
             let mut plain = setup.clone();
             plain.speech_language = None;
+            plain.language_codes.clear();
             connect_once(&plain, resume_handle).await
         }
         other => other,
@@ -1466,6 +1483,10 @@ mod tests {
             .unwrap();
         assert!(sys.contains("Always reply in Polish"), "{sys}");
         assert!(sys.contains("Never switch language based on the topic"), "{sys}");
+        assert!(sys.contains("interpret their speech as Polish"), "{sys}");
+        assert_eq!(msg.pointer("/setup/inputAudioTranscription/languageCodes"), Some(&json!(["pl-PL", "en-US"])));
+        let pl = Settings { language: "pl".into(), ..settings.clone() };
+        assert_eq!(commands_setup(&pl).setup_message(None).pointer("/setup/inputAudioTranscription/languageCodes"), Some(&json!(["pl-PL"])));
 
         let en = Settings {
             language: "en".into(),

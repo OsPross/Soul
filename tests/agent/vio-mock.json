@@ -3,7 +3,8 @@
   "token": "mock-token-5f1c",
   "tabs": [
     {
-      "tabId": 1,
+      "tabId": "tab-a1",
+      "asleep": true,
       "title": "Formularz zgłoszeniowy",
       "url": "https://example.com/zgloszenie",
       "active": true,
@@ -19,7 +20,7 @@
       ]
     },
     {
-      "tabId": 2,
+      "tabId": "tab-p2",
       "title": "Okno prywatne",
       "url": "https://example.org/private",
       "active": false,
@@ -38,7 +39,7 @@
     {
       "id": "vio_forbidden",
       "task": "przeczytaj tę stronę",
-      "active_tab": 2,
+      "active_tab": "tab-p2",
       "script": [],
       "expect_error": "forbidden"
     },
@@ -81,6 +82,12 @@
       "script": [["browser_fill", { "id": 4, "text": "tajne123" }]],
       "expect_error": true,
       "expect": { "values": { "Hasło": "" } }
+    },
+    {
+      "id": "vio_open_url",
+      "task": "otwórz example.com/nowa w przeglądarce",
+      "script": [["open_url", { "url": "example.com/nowa", "final": true }]],
+      "expect": { "opened": ["https://example.com/nowa"] }
     }
   ]
 }

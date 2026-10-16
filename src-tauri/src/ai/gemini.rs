@@ -961,6 +961,9 @@ pub fn personality_instruction(personality: &str) -> &'static str {
 /// System prompt for the Live commands session: tool rules + spoken-reply style.
 pub fn agent_voice_system_prompt(settings: &crate::config::Settings) -> String {
     let mut out = agent_live_system_prompt(&settings.language);
+    if matches!(settings.language.trim(), "" | "auto" | "pl") {
+        out.push_str(" The user speaks Polish (sometimes English). Always hear and interpret their speech as Polish — never as Slovak, Czech, Spanish, Italian, French or any other language.");
+    }
     out.push_str(
         " You reply with your voice. After a tool runs, confirm out loud in one short sentence what you did (e.g. \"Otwieram Spotify.\", \"Ściszam do trzydziestu procent.\"). If a tool fails, say briefly what went wrong. For general questions, answer by voice directly instead of calling a tool; questions about the screen go to computer_task.",
     );

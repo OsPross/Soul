@@ -96,7 +96,7 @@ pub fn function_declarations(browser: bool) -> Value {
             decl(
                 "browser_open",
                 "Open a URL in a new tab, or switch to an open tab by tab_id (wakes a sleeping tab).",
-                json!({ "url": { "type": "string" }, "tab_id": { "type": "integer" } }),
+                json!({ "url": { "type": "string" }, "tab_id": { "type": "string" } }),
                 &[],
                 true,
             ),

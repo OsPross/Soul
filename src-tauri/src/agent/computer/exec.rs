@@ -30,7 +30,7 @@ pub struct Cx<'a> {
     pub monitors: &'a [Monitor],
     pub highlight: bool,
     /// This step goes through the Vio browser API: client + active tab.
-    pub vio: Option<(&'a vio::Client, i64)>,
+    pub vio: Option<(&'a vio::Client, &'a str)>,
 }
 
 /// Result of a performed step.
@@ -345,14 +345,16 @@ fn attempt(cx: &Cx, a: &Action, strategy: Strategy) -> Result<Attempt, String> {
         Action::OpenApp(name) => cx.platform.open_app(name).map(|_| Attempt { used: "open_app", has_alternate: false }),
         Action::OpenSettings(page) => cx.platform.open_settings_page(page).map(|_| Attempt { used: "open_settings", has_alternate: false }),
         Action::FocusApp(name) => cx.platform.focus_app(name).map(|_| Attempt { used: "focus_app", has_alternate: false }),
-        Action::OpenUrl(url) => cx.platform.open_url(url).map(|_| Attempt { used: "open_url", has_alternate: false }),
+        Action::OpenUrl(url) => vio::open_url(cx.platform.as_ref(), url)
+            .unwrap_or_else(|| cx.platform.open_url(url))
+            .map(|_| Attempt { used: "open_url", has_alternate: false }),
         Action::Wait(_) | Action::ReadText(_) | Action::Done(_) | Action::AskUser(_) => Ok(Attempt { used: "none", has_alternate: false }),
         Action::Browser(_) => Err("The Vio browser is not connected.".into()),
     }
 }
 
 /// A Vio step: the API call is the action and its `ok` the verification (no settle polling).
-fn perform_vio(cx: &Cx, c: &vio::Client, tab: i64, d: &Decision) -> Result<Performed, String> {
+fn perform_vio(cx: &Cx, c: &vio::Client, tab: &str, d: &Decision) -> Result<Performed, String> {
     let vref = |t: &Target| match t {
         Target::Id(id) => cx.snap.get(*id).map(|e| e.automation_id.clone()).ok_or_else(|| "No such element.".to_string()),
         Target::Point { .. } => Err("Vio needs an element id, not coordinates.".to_string()),
@@ -383,10 +385,7 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: i64, d: &Decision) -> Result<Perfo
         Action::Browser(op) => match op {
             BrowserOp::ListTabs => read = Some(vio::tabs_text(&c.call("listTabs", json!({}))?)),
             BrowserOp::Open { url: Some(u), .. } => {
-                let r = c.call("openTab", json!({ "url": u }))?;
-                if let Some(id) = r["tabId"].as_i64() {
-                    c.call("activateTab", json!({ "tabId": id }))?;
-                }
+                vio::open_tab(c, cx.platform.as_ref(), u)?;
             }
             BrowserOp::Open { tab: Some(t), .. } => {
                 c.call("activateTab", json!({ "tabId": t }))?;
@@ -398,7 +397,10 @@ fn perform_vio(cx: &Cx, c: &vio::Client, tab: i64, d: &Decision) -> Result<Perfo
             BrowserOp::ReadPage => read = Some(vio::page_text(&c.call("getPage", json!({ "tabId": tab }))?)),
             BrowserOp::GetElements => detail = " (the list is refreshed every turn)".into(),
         },
-        Action::OpenApp(_) | Action::OpenSettings(_) | Action::FocusApp(_) | Action::OpenUrl(_) => {
+        Action::OpenUrl(u) => {
+            vio::open_tab(c, cx.platform.as_ref(), u)?;
+        }
+        Action::OpenApp(_) | Action::OpenSettings(_) | Action::FocusApp(_) => {
             attempt(cx, &d.action, Strategy::Primary)?;
         }
         _ => return Err("Not possible through Vio: use browser_click / browser_fill / browser_scroll with an element id.".into()),

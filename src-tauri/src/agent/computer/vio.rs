@@ -176,7 +176,8 @@ impl Client {
         tx.send(Req { cmd: cmd.to_string(), args, reply }).map_err(|_| "Vio is not connected.")?;
         let deadline = Instant::now() + CALL_TIMEOUT;
         loop {
-            if super::killswitch::aborted() {
+            // The kill switch only applies while a task runs (it stays set after one was stopped).
+            if super::killswitch::is_running() && super::killswitch::aborted() {
                 return Err(crate::platform::input::ABORTED.into());
             }
             match rx.recv_timeout(Duration::from_millis(50)) {
@@ -226,7 +227,7 @@ impl Client {
         let (mut sink, mut stream) = ws.split();
         self.set_status(State::Authorizing, None);
         eprintln!("[soul][agent] vio connected (port {}, pid {}) — authorizing", d.port, d.pid);
-        let auth = json!({ "cmd": "auth", "token": d.token }).to_string();
+        let auth = json!({ "id": 0, "cmd": "auth", "token": d.token }).to_string();
         if sink.send(Message::Text(auth.into())).await.is_err() {
             return None;
         }
@@ -439,11 +440,58 @@ pub fn snapshot(tab: &Value, elements: &Value, window: Option<WindowInfo>) -> Ui
     UiSnapshot { gen: 0, window: w, elements, source: Source::Vio, took_ms: 0, truncated }
 }
 
-/// `listTabs` → the active tab (else the first).
-pub fn active_tab(tabs: &Value) -> Option<(Value, i64)> {
+/// A tab id as Vio uses it: a string (numbers accepted from the model / old mocks).
+pub fn tab_key(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// `listTabs` (`[{tabId, title, url, active}]`) → the active tab (else the first).
+pub fn active_tab(tabs: &Value) -> Option<(Value, String)> {
     let list = tabs.as_array()?;
     let tab = list.iter().find(|t| t["active"] == json!(true)).or_else(|| list.first())?;
-    Some((tab.clone(), tab["tabId"].as_i64()?))
+    Some((tab.clone(), tab_key(&tab["tabId"])?))
+}
+
+/// `getElements` of a tab; a sleeping tab („tab not loaded (activateTab first)”) is activated and
+/// polled until its page is up (≤ 3 s).
+pub fn elements_of(c: &Client, tab: &str) -> Result<Value, String> {
+    match c.call("getElements", json!({ "tabId": tab })) {
+        Err(e) if e.contains("not loaded") || e.contains("not ready") => {
+            c.call("activateTab", json!({ "tabId": tab }))?;
+            let mut last = e;
+            for _ in 0..10 {
+                super::killswitch::sleep(Duration::from_millis(300));
+                match c.call("getElements", json!({ "tabId": tab })) {
+                    Err(e) if e.contains("not loaded") || e.contains("not ready") => last = e,
+                    r => return r,
+                }
+            }
+            Err(last)
+        }
+        r => r,
+    }
+}
+
+/// `open_url` through Vio while it is connected (Live tool, router, agent): see [`open_tab`].
+/// `None` = not connected, the caller uses the system browser.
+pub fn open_url(platform: &dyn crate::platform::Platform, url: &str) -> Option<Result<String, String>> {
+    let c = global().filter(|c| c.status().state == State::Connected)?;
+    Some(open_tab(&c, platform, url))
+}
+
+/// New foreground tab in Vio, then the Vio window in front.
+pub fn open_tab(c: &Client, platform: &dyn crate::platform::Platform, url: &str) -> Result<String, String> {
+    let u = normalize_url(url)?;
+    c.call("openTab", json!({ "url": u }))?;
+    if let Err(e) = platform.focus_app("Vio") {
+        eprintln!("[soul][agent] vio focus failed: {e}");
+    }
+    eprintln!("[soul][agent] open_url via vio");
+    Ok(format!("Opened {u} in Vio"))
 }
 
 /// `listTabs` for the model (READ).
@@ -454,7 +502,7 @@ pub fn tabs_text(tabs: &Value) -> String {
                 .map(|t| {
                     format!(
                         "tab_id={} \"{}\" {}{}",
-                        t["tabId"],
+                        tab_key(&t["tabId"]).unwrap_or_default(),
                         crate::platform::ui::sanitize(&clip(&text(t, "title"), 80)),
                         clip(&text(t, "url"), 120),
                         if t["active"] == json!(true) { " (active)" } else { "" }
@@ -508,7 +556,48 @@ mod tests {
         assert!(obs.contains("4 checkbox \"Newsletter\" checked\n"), "{obs}");
         assert!(obs.contains("5 button \"Wyślij\"\n"), "{obs}");
         assert!(!obs.contains('@'), "no coordinates for Vio");
-        assert_eq!(active_tab(&json!([{ "tabId": 1 }, tab])).unwrap().1, 4);
+        assert_eq!(active_tab(&json!([{ "tabId": 1 }, tab])).unwrap().1, "4");
+        // Real Vio: string ids.
+        let real = json!([{ "tabId": "t-a", "title": "httpbin", "url": "https://httpbin.org/forms/post", "active": false },
+                          { "tabId": "t-b", "title": "Wiki", "url": "https://pl.wikipedia.org/", "active": true }]);
+        assert_eq!(active_tab(&real).unwrap().1, "t-b");
+        assert!(tabs_text(&real).contains("tab_id=t-b \"Wiki\""), "{}", tabs_text(&real));
+    }
+
+    /// Real running Vio (API toggle on): `cargo test --lib vio_live_probe -- --ignored --nocapture`.
+    /// Prints listTabs + getElements of the active tab; accept „Zezwól” in Vio if asked.
+    #[test]
+    #[ignore]
+    fn vio_live_probe() {
+        let path = discovery_path().expect("no config dir");
+        assert!(discover(&path).is_some(), "Vio API is off or Vio is not running ({})", path.display());
+        let c = Client::start(path, true, Box::new(|s| eprintln!("[probe] status {:?}", s.state)));
+        let end = Instant::now() + AUTH_TIMEOUT + Duration::from_secs(5);
+        while c.status().state != State::Connected && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        c.wait_ready(Duration::from_secs(1)).expect("not connected");
+        if std::env::var_os("SOUL_VIO_PROBE_OPEN").is_some() {
+            // Diagnoses an empty listTabs: a fresh tab (no webContents yet) vs. after it loaded.
+            println!("openTab: {:?}", c.call("openTab", json!({ "url": "https://example.com" })));
+            println!("listTabs right after: {}", c.call("listTabs", json!({})).unwrap_or_default());
+            std::thread::sleep(Duration::from_secs(3));
+            println!("listTabs after 3 s: {}", c.call("listTabs", json!({})).unwrap_or_default());
+        }
+        let tabs = c.call("listTabs", json!({})).expect("listTabs");
+        println!("listTabs raw:
+{}", serde_json::to_string_pretty(&tabs).unwrap());
+        println!("tabs_text:
+{}", tabs_text(&tabs));
+        let (tab, id) = active_tab(&tabs).expect("Vio has no open tab");
+        let els = elements_of(&c, &id).expect("getElements");
+        let n = els.as_array().map_or(0, Vec::len);
+        println!("getElements tab={id}: {n} elements, first 15:");
+        for e in els.as_array().into_iter().flatten().take(15) {
+            println!("  {e}");
+        }
+        println!("observation:
+{}", snapshot(&tab, &els, None).observation());
     }
 
     #[test]

@@ -37,7 +37,7 @@ pub enum Action {
 pub enum BrowserOp {
     ListTabs,
     /// New tab with `url`, or switch to the open tab `tab` (wakes a sleeping one).
-    Open { url: Option<String>, tab: Option<i64> },
+    Open { url: Option<String>, tab: Option<String> },
     Navigate(String),
     ReadPage,
     GetElements,
@@ -190,7 +190,7 @@ pub fn parse(name: &str, args: &Value) -> Result<Decision, String> {
         },
         "browser_list_tabs" => Action::Browser(BrowserOp::ListTabs),
         "browser_open" => {
-            let tab = arg_num(args, "tab_id").filter(|n| *n >= 0.0).map(|n| n.round() as i64);
+            let tab = args.get("tab_id").and_then(super::vio::tab_key);
             let url = arg_str(args, "url").map(|u| super::vio::normalize_url(&u)).transpose()?;
             if url.is_none() && tab.is_none() {
                 return Err("browser_open: give a url or a tab_id".into());
@@ -317,7 +317,7 @@ pub fn history_line(d: &Decision, snap: &UiSnapshot) -> String {
             BrowserOp::Open { url, tab } => format!(
                 "browser_open{}{}",
                 url.as_deref().map(|u| format!(" {}", clip(u, 80))).unwrap_or_default(),
-                tab.map(|t| format!(" tab {t}")).unwrap_or_default()
+                tab.as_deref().map(|t| format!(" tab {t}")).unwrap_or_default()
             ),
             BrowserOp::Navigate(u) => format!("browser_navigate {}", clip(u, 80)),
             BrowserOp::ReadPage => "browser_read_page".into(),
@@ -385,7 +385,8 @@ mod tests {
             parse("browser_open", &json!({ "url": "example.com" })).unwrap().action,
             Action::Browser(BrowserOp::Open { url: Some("https://example.com".into()), tab: None })
         );
-        assert_eq!(parse("browser_open", &json!({ "tab_id": 2 })).unwrap().action, Action::Browser(BrowserOp::Open { url: None, tab: Some(2) }));
+        assert_eq!(parse("browser_open", &json!({ "tab_id": 2 })).unwrap().action, Action::Browser(BrowserOp::Open { url: None, tab: Some("2".into()) }));
+        assert_eq!(parse("browser_open", &json!({ "tab_id": "t-1" })).unwrap().action, Action::Browser(BrowserOp::Open { url: None, tab: Some("t-1".into()) }));
         assert!(parse("browser_open", &json!({})).is_err());
         assert!(parse("browser_navigate", &json!({ "url": "javascript:alert(1)" })).is_err());
         assert!(parse("browser_navigate", &json!({ "url": "file:///C:/Windows" })).is_err());

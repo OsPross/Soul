@@ -1213,6 +1213,14 @@ fn handle_live_calls(
     try_router: bool,
 ) -> LiveAgentOutcome {
     log_live_final(app, released, heard, "tool_call");
+    // The model misheard Polish as another language: ask again instead of acting on a guess.
+    let settings = load_settings(app).unwrap_or_default();
+    if matches!(settings.language.trim(), "" | "auto" | "pl") && crate::i18n::clearly_not_polish(heard) {
+        eprintln!("[soul][agent] transcript not Polish — asking to repeat");
+        live.commands.send_tool_responses(skipped_responses(calls, "Not executed: the user's speech was not understood. Say nothing."));
+        let lang = crate::i18n::ui_lang(&settings);
+        return LiveAgentOutcome::Done(Err(crate::i18n::tr(lang, "Nie zrozumiałem — powtórz, proszę.", "I didn't catch that — please repeat.").into()), None);
+    }
     // The router's own match first, else the model's hand-off (`computer_task {goal}`).
     let task = if try_router && computer::is_computer_task(heard) {
         Some(heard.to_string())
@@ -1645,7 +1653,7 @@ fn run_tool(
         }
         "open_url" => {
             let url = arg_str(args, "url")?;
-            platform.open_url(&url)
+            computer::vio::open_url(platform.as_ref(), &url).unwrap_or_else(|| platform.open_url(&url))
         }
         "web_search" => {
             let query = arg_str(args, "query")?;

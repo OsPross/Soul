@@ -32,7 +32,12 @@ struct Page {
 }
 
 fn tab_mut<'a>(p: &'a mut Page, id: &Value) -> Result<&'a mut Value, String> {
-    p.tabs.iter_mut().find(|t| &t["tabId"] == id).ok_or_else(|| "no such tab".to_string())
+    p.tabs.iter_mut().find(|t| &t["tabId"] == id).ok_or_else(|| "forbidden".to_string())
+}
+
+/// Like Vio: a discarded tab has no page until `activateTab`.
+fn loaded(t: &Value) -> Result<(), String> {
+    if t["asleep"] == json!(true) { Err("tab not loaded (activateTab first)".into()) } else { Ok(()) }
 }
 
 fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
@@ -43,7 +48,7 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
             p.tabs.iter().map(|t| json!({ "tabId": t["tabId"], "title": t["title"], "url": t["url"], "active": t["active"] })).collect(),
         )),
         "openTab" => {
-            let id = p.tabs.iter().filter_map(|t| t["tabId"].as_i64()).max().unwrap_or(0) + 1;
+            let id = format!("tab-new-{}", p.tabs.len());
             for t in &mut p.tabs {
                 t["active"] = json!(false);
             }
@@ -53,12 +58,16 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
         "activateTab" => {
             for t in &mut p.tabs {
                 t["active"] = json!(t["tabId"] == a["tabId"]);
+                if t["tabId"] == a["tabId"] {
+                    t["asleep"] = json!(false);
+                }
             }
             Ok(Value::Null)
         }
         "navigate" => {
             let t = tab_mut(p, &a["tabId"])?;
             allowed(t)?;
+            loaded(t)?;
             t["url"] = a["url"].clone();
             p.gen += 1;
             Ok(Value::Null)
@@ -66,11 +75,13 @@ fn handle(p: &mut Page, cmd: &str, a: &Value) -> Result<Value, String> {
         "getPage" => {
             let t = tab_mut(p, &a["tabId"])?;
             allowed(t)?;
+            loaded(t)?;
             Ok(json!({ "url": t["url"], "title": t["title"], "text": t["text"] }))
         }
         "getElements" => {
             let t = tab_mut(p, &a["tabId"])?;
             allowed(t)?;
+            loaded(t)?;
             let els = t["elements"].as_array().cloned().unwrap_or_default();
             Ok(Value::Array(
                 els.into_iter()
@@ -369,6 +380,11 @@ fn check(case: &Value, page: &Page, out: &Outcome, confirms: &[String], prompts:
             bad.push(format!("{label}: want {want}, got {got}"));
         }
     }
+    for url in exp["opened"].as_array().into_iter().flatten() {
+        if !page.tabs.iter().any(|t| t["url"] == *url && t["active"] == json!(true)) {
+            bad.push(format!("{url} was not opened as the active Vio tab"));
+        }
+    }
     for p in case["expect_prompt"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         if !prompts.iter().any(|t| t.contains(p)) {
             bad.push(format!("the observation lacks {p}"));
@@ -408,7 +424,7 @@ pub(super) fn run_cases(model: Option<ModelFn>, only: Option<&str>) -> Vec<Row> 
             continue;
         }
         let mut tabs = sc["tabs"].as_array().unwrap().clone();
-        if let Some(active) = case["active_tab"].as_i64() {
+        if let Some(active) = case["active_tab"].as_str() {
             for t in &mut tabs {
                 t["active"] = json!(t["tabId"] == json!(active));
             }
