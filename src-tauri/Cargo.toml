@@ -1,6 +1,6 @@
 [package]
 name = "soul"
-version = "0.2.1"
+version = "0.3.0"
 description = "Soul — cross-platform voice AI desktop assistant"
 authors = ["you"]
 edition = "2021"

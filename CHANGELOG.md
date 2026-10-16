@@ -6,6 +6,8 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
 ### Added
 
 - **Soul Agent — voice-driven computer control.** Say „kliknij Zapisz”, „przewiń w dół”, „wpisz w
