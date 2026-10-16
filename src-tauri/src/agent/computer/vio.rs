@@ -483,6 +483,31 @@ pub fn open_url(platform: &dyn crate::platform::Platform, url: &str) -> Option<R
     Some(open_tab(&c, platform, url))
 }
 
+/// A page for the user: a Vio tab while Vio is connected, else the system browser.
+pub fn browse(platform: &dyn crate::platform::Platform, url: &str) -> Result<String, String> {
+    browse_with(global().as_deref(), platform, url)
+}
+
+pub(super) fn browse_with(c: Option<&Client>, platform: &dyn crate::platform::Platform, url: &str) -> Result<String, String> {
+    match c.filter(|c| c.status().state == State::Connected) {
+        Some(c) => open_tab(c, platform, url),
+        None => platform.open_url(url),
+    }
+}
+
+pub fn web_search(platform: &dyn crate::platform::Platform, query: &str) -> Result<String, String> {
+    browse(platform, &crate::platform::apps::search_url(query, Some("google"))?)
+}
+
+pub fn youtube_search(platform: &dyn crate::platform::Platform, query: &str) -> Result<String, String> {
+    browse(platform, &crate::platform::apps::youtube_search_url(query)?)
+}
+
+/// First YouTube result (best-effort scrape, falls back to the search page).
+pub fn youtube_play(platform: &dyn crate::platform::Platform, query: &str) -> Result<String, String> {
+    browse(platform, &crate::platform::apps::youtube_first_result_url(query)?)
+}
+
 /// New foreground tab in Vio, then the Vio window in front.
 pub fn open_tab(c: &Client, platform: &dyn crate::platform::Platform, url: &str) -> Result<String, String> {
     let u = normalize_url(url)?;
@@ -562,6 +587,16 @@ mod tests {
                           { "tabId": "t-b", "title": "Wiki", "url": "https://pl.wikipedia.org/", "active": true }]);
         assert_eq!(active_tab(&real).unwrap().1, "t-b");
         assert!(tabs_text(&real).contains("tab_id=t-b \"Wiki\""), "{}", tabs_text(&real));
+    }
+
+    #[test]
+    fn search_urls_are_http_for_vio() {
+        for u in [
+            crate::platform::apps::search_url("pogoda łódź", Some("google")).unwrap(),
+            crate::platform::apps::youtube_search_url("queen").unwrap(),
+        ] {
+            assert_eq!(normalize_url(&u).unwrap(), u);
+        }
     }
 
     /// Real running Vio (API toggle on): `cargo test --lib vio_live_probe -- --ignored --nocapture`.

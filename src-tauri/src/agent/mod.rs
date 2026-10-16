@@ -1653,7 +1653,7 @@ fn run_tool(
         }
         "open_url" => {
             let url = arg_str(args, "url")?;
-            computer::vio::open_url(platform.as_ref(), &url).unwrap_or_else(|| platform.open_url(&url))
+            computer::vio::browse(platform.as_ref(), &url)
         }
         "web_search" => {
             let query = arg_str(args, "query")?;
@@ -1661,11 +1661,11 @@ fn run_tool(
         }
         "youtube_search" => {
             let query = arg_str(args, "query")?;
-            platform.youtube_search(&query)
+            computer::vio::youtube_search(platform.as_ref(), &query)
         }
         "youtube_play" => {
             let query = arg_str(args, "query")?;
-            platform.youtube_play(&query)
+            computer::vio::youtube_play(platform.as_ref(), &query)
         }
         "close_app" => {
             let app_name = arg_str(args, "name")?;
@@ -1839,10 +1839,10 @@ fn web_search_with_answer(
 ) -> Result<String, String> {
     let settings = load_settings(app)?;
     if !router::is_question(query) || settings.api_key.trim().is_empty() {
-        return platform.web_search(query);
+        return computer::vio::web_search(platform.as_ref(), query);
     }
     let _ = emit_overlay(app, "thinking", Some(format!("Szukam: {}", shorten(query, 60))));
-    let opened = settings.search_open_browser && platform.web_search(query).is_ok();
+    let opened = settings.search_open_browser && computer::vio::web_search(platform.as_ref(), query).is_ok();
     let client = GeminiClient::new(&settings.api_key, settings.effective_ask_model());
     let fallback = resolve_fallback_model(&settings, &crate::ai::gemini::cached_models());
     let t0 = Instant::now();
@@ -1861,7 +1861,7 @@ fn web_search_with_answer(
             if opened {
                 Ok(format!("Otworzyłem wyniki wyszukiwania: {query}"))
             } else {
-                platform.web_search(query)
+                computer::vio::web_search(platform.as_ref(), query)
             }
         }
     }

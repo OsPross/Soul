@@ -322,9 +322,9 @@ fn step_label(s: &SceneStep) -> String {
 fn run_step(platform: &Arc<dyn Platform>, s: &SceneStep) -> Result<String, String> {
     match s.kind.as_str() {
         "open_app" => platform.open_app(&s.value),
-        "open_url" => platform.open_url(&s.value),
-        "youtube_play" => platform.youtube_play(&s.value),
-        "web_search" => platform.web_search(&s.value),
+        "open_url" => crate::agent::computer::vio::browse(platform.as_ref(), &s.value),
+        "youtube_play" => crate::agent::computer::vio::youtube_play(platform.as_ref(), &s.value),
+        "web_search" => crate::agent::computer::vio::web_search(platform.as_ref(), &s.value),
         "set_volume" => {
             let p: u8 = s
                 .value

@@ -20,7 +20,8 @@ changelog shown in Settings → O aplikacji / About.
 
 - Vio: tabs are now read correctly (Vio's tab ids are text), sleeping tabs are woken before reading,
   and „otwórz …” links open as a new Vio tab (with Vio brought to the front) whenever Vio is
-  connected — the system browser is used only without Vio.
+  connected — the system browser is used only without Vio. Web searches and YouTube
+  (search / play) open in Vio too, also from scenes.
 - Voice commands no longer drift into Slovak, Spanish, Italian or French: the Live session is pinned
   to Polish, and a command that was clearly heard in another language makes Soul ask you to repeat
   instead of acting on it.

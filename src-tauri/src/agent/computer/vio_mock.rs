@@ -478,6 +478,41 @@ pub(super) fn run_cases(model: Option<ModelFn>, only: Option<&str>) -> Vec<Row> 
     rows
 }
 
+/// web_search / youtube_* land in a Vio tab while connected; without Vio they use the system browser.
+#[test]
+fn searches_open_in_vio_when_connected() {
+    let sc = scenario();
+    let token = sc["token"].as_str().unwrap().to_string();
+    let mock = Mock::start(token.clone(), sc["tabs"].as_array().unwrap().clone());
+    let dir = std::env::temp_dir().join(format!("soul-vio-mock-{}-browse", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("automation.json");
+    std::fs::write(&path, json!({ "port": mock.port, "token": token, "pid": std::process::id() }).to_string()).unwrap();
+    let client = Client::start(path, true, Box::new(|_| {}));
+    assert!(wait_for(&client, |s| s.state == State::Connected), "mock Vio never connected");
+
+    let desktop = FakeDesktop;
+    let urls = [
+        apps::search_url("pogoda w łodzi", Some("google")).unwrap(),
+        apps::youtube_search_url("queen").unwrap(),
+        "https://www.youtube.com/watch?v=abc".to_string(),
+    ];
+    for url in &urls {
+        let r = super::vio::browse_with(Some(&client), &desktop, url);
+        assert!(r.is_ok(), "{url}: {r:?}");
+        let page = mock.page.lock();
+        let active: Vec<_> = page.tabs.iter().filter(|t| t["active"] == json!(true)).collect();
+        assert!(active.len() == 1 && active[0]["url"] == json!(url), "{url} is not the active Vio tab");
+    }
+    // Not connected: the system browser is asked (the fake desktop refuses, which proves the path).
+    let r = super::vio::browse_with(None, &desktop, &urls[0]);
+    assert_eq!(r, Err("fake desktop".to_string()));
+    let before = mock.page.lock().tabs.len();
+    let _ = super::vio::browse_with(None, &desktop, &urls[1]);
+    assert_eq!(mock.page.lock().tabs.len(), before, "no Vio tab without a connection");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn vio_mock_cases() {
     let rows = run_cases(None, None);
