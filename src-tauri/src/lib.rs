@@ -753,6 +753,12 @@ pub fn run() {
             island::island_focus_window,
             island::island_fit_zoom,
             island::island_media_action,
+            spotify::spotify_auth_status,
+            spotify::spotify_connect,
+            spotify::spotify_disconnect,
+            spotify::spotify_playlists,
+            spotify::spotify_devices,
+            spotify::spotify_run,
             island::island_get_now_playing,
             island::island_clipboard_list,
             island::island_clipboard_clear,
@@ -811,6 +817,7 @@ pub fn run() {
             // Vio browser API (idle until its automation.json appears).
             agent::computer::vio::init(app.handle(), agent::computer::config::load(app.handle()).enabled);
             if let Ok(dir) = app.path().app_data_dir() {
+                spotify::auth::init(dir.clone());
                 ai::usage::init(dir);
             }
             // Price watches: page fetch + HTML parse every few hours, never a model call.

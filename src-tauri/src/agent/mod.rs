@@ -7,7 +7,7 @@ pub(crate) mod computer;
 pub(crate) mod confirm;
 pub(crate) mod context;
 mod intent;
-mod router;
+pub(crate) mod router;
 pub(crate) mod text_action;
 
 pub use intent::{classify_with, Intent};

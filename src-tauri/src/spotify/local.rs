@@ -72,8 +72,8 @@ pub fn ensure_spotify_running_background() -> Result<bool, String> {
     Ok(true)
 }
 
-/// Poll `ready` every 300 ms until it holds or `timeout` passes.
-pub fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
+/// Poll `ready` every `step` until it holds or `timeout` passes.
+pub fn wait_for(timeout: Duration, step: Duration, mut ready: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
         if ready() {
@@ -82,7 +82,7 @@ pub fn wait_for(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
         if Instant::now() >= deadline {
             return false;
         }
-        std::thread::sleep(Duration::from_millis(300));
+        std::thread::sleep(step);
     }
 }
 
