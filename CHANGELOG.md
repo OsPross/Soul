@@ -6,6 +6,8 @@ changelog shown in Settings → O aplikacji / About.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
 ### Added
 
 - **Spotify w tle.** Spotify is controlled without its window ever coming to the front. The Island
