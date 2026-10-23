@@ -8,6 +8,9 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Kula 3D (Settings → Wygląd → Styl duszy).** A WebGL particle orb as an alternative to the droplet
+  spirit: a rippling sphere while listening / speaking, a knot while thinking, sonar rings for music
+  and a drawn-in checkmark on success. Falls back to the droplet without WebGL.
 - **Słownik i snippety (Settings → Pamięć).** Dictation keeps your dictionary words spelled exactly,
   applies word replacements („cloud code” → „Claude Code”), and a spoken snippet phrase („mój podpis”)
   pastes its whole text unchanged.

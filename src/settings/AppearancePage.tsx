@@ -8,6 +8,7 @@ import {
   type AppearanceConfig,
   type Feature,
   type Preset,
+  type SpiritStyle,
 } from "../anim/config";
 import { tr } from "../i18n";
 import { playCue } from "../island/sounds";
@@ -168,11 +169,21 @@ export default function AppearancePage(_: { s: SettingsCtx }) {
             <SectionReset
               label={reset}
               onClick={() =>
-                set({ accent: D.accent, spiritSize: D.spiritSize, islandOpacity: D.islandOpacity, blur: D.blur, glow: D.glow })
+                set({ spiritStyle: D.spiritStyle, accent: D.accent, spiritSize: D.spiritSize, islandOpacity: D.islandOpacity, blur: D.blur, glow: D.glow })
               }
             />
           }
         >
+          <Row label={tr(lang, "Styl duszy", "Spirit style")}>
+            <Segmented<SpiritStyle>
+              value={cfg.spiritStyle}
+              onChange={(spiritStyle) => set({ spiritStyle })}
+              options={[
+                { value: "droplet", label: tr(lang, "Duszek (SVG)", "Droplet (SVG)") },
+                { value: "orb", label: tr(lang, "Kula 3D (WebGL)", "3D Orb (WebGL)") },
+              ]}
+            />
+          </Row>
           <Row label={tr(lang, "Kolor akcentu", "Accent colour")} hint={tr(lang, "Blask duszy i kontrolki. Okładka albumu może go nadpisać.", "Spirit glow and controls. Album art can override it.")}>
             <div className="flex items-center gap-1.5">
               {SWATCHES.map((c) => (

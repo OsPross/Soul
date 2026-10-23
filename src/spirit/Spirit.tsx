@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useAnim } from "../anim/AnimationProvider";
 import { readLevel, useLevels } from "../lib/levels";
 import { hexToRgbTriplet } from "../theme/tokens";
+import OrbSpirit from "./OrbSpirit";
 import { ParticleField } from "./particles";
 
 /**
@@ -122,7 +123,15 @@ function targetsFor(state: SpiritState, t: number, mic: number, voice: number, m
   }
 }
 
-export default function Spirit({ state, color, size, paused = false, className, title }: Props) {
+/** The chosen spirit style; the orb falls back to the droplet where WebGL is unavailable. */
+export default function Spirit(props: Props) {
+  const anim = useAnim();
+  const [noWebGl, setNoWebGl] = useState(false);
+  if (anim.cfg.spiritStyle === "orb" && !noWebGl) return <OrbSpirit {...props} onUnsupported={() => setNoWebGl(true)} />;
+  return <DropletSpirit {...props} />;
+}
+
+function DropletSpirit({ state, color, size, paused = false, className, title }: Props) {
   const anim = useAnim();
   useLevels();
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");

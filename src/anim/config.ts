@@ -31,6 +31,8 @@ export const FEATURES = [
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
+export type SpiritStyle = "droplet" | "orb";
+
 export interface AppearanceConfig {
   version: 1;
   uiLang: UiLang;
@@ -38,6 +40,8 @@ export interface AppearanceConfig {
   accent: string;
   /** Spirit size multiplier 0.8–1.4. */
   spiritSize: number;
+  /** SVG droplet ghost or the WebGL particle orb. */
+  spiritStyle: SpiritStyle;
   /** Island glass opacity 0.80–1. */
   islandOpacity: number;
   /** Backdrop blur px 0–40. */
@@ -81,6 +85,7 @@ export const DEFAULT_APPEARANCE: AppearanceConfig = {
   uiLang: "pl",
   accent: tokens.accentDefault,
   spiritSize: 1,
+  spiritStyle: "droplet",
   islandOpacity: 0.94,
   blur: 24,
   glow: 1,
@@ -143,6 +148,7 @@ export function normalizeAppearance(raw: unknown): AppearanceConfig {
     uiLang: r.uiLang === "en" ? "en" : "pl",
     accent: typeof r.accent === "string" && /^#[0-9a-f]{6}$/i.test(r.accent) ? r.accent : d.accent,
     spiritSize: clamp(r.spiritSize, 0.8, 1.4, d.spiritSize),
+    spiritStyle: r.spiritStyle === "orb" ? "orb" : "droplet",
     islandOpacity: clamp(r.islandOpacity, 0.8, 1, d.islandOpacity),
     blur: clamp(r.blur, 0, 40, d.blur),
     glow: clamp(r.glow, 0, 1.5, d.glow),

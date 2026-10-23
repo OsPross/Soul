@@ -256,6 +256,8 @@ Playback progress: `island/progress.ts` (anchor + local interpolation; resync on
   (no per-frame React renders). States: `idle | listening | thinking | speaking | success | error | music`; the
   Island maps assistant states to them (`spiritStateOf`). `size` = body width in px; particles only at ≥28 px.
   `SpiritOrDot` falls back to a status dot when the spirit feature is off.
+  `appearance.spiritStyle = "orb"` swaps in `src/spirit/OrbSpirit.tsx` (WebGL points, one draw call; formations sphere /
+  trefoil / sonar / ring+checkmark per state; no WebGL → droplet).
 - **Levels** (`src/lib/levels.ts`): `soul://mic-level` (Rust `audio::attach_level_emitter`, ~30 Hz while recording, own
   thread) and `soul://voice-level` (TTS) are kept in refs and read inside rAF loops; stale values decay.
 - **Island stages** (`island/Island.tsx`): panel morphs width/height/radius with `anim.spring("morph")`; content is a
