@@ -774,7 +774,8 @@ impl Listener {
             return Some("disabled");
         }
         let state = self.app.state::<AppState>();
-        if state.recorder.is_capturing() {
+        // A recorded call is full of "Soul"-like speech; push-to-talk still works.
+        if state.recorder.is_capturing() || crate::notes::is_recording() {
             return Some("recording");
         }
         if ask::is_active(&state.ask) {

@@ -12,6 +12,9 @@ Features: **Dynamic Island** top bar, **one-key push-to-talk** (dictation + voic
 | Voice commands + spoken replies | `gemini-3.8-live` | Live API with function calling, native audio out |
 | Circle-to-Ask | `gemini-3.1-flash-lite` | REST `generateContent` |
 | REST fallback | `gemini-3.5-flash-lite` | REST |
+| Offline dictation fallback + call notes | NVIDIA Parakeet TDT 0.6B v3 (int8) + pyannote diarizer | local, `sherpa-onnx` (Settings → Models → Download, ~700 MB) |
+
+**Call notes:** say „nagraj spotkanie” / "record meeting" (or Island → Spotkania → ● Nagraj rozmowę). Soul records the mic and the system audio (WASAPI loopback / PulseAudio monitor), transcribes locally, labels speakers, then Gemini writes the summary and to-dos. „Zatrzymaj nagrywanie spotkania” / "stop recording meeting" ends it. Notes live in `<app data>/notes/`; the audio is deleted after transcription.
 
 With **Use Live API** on (Settings, default), audio streams in 100 ms chunks while you hold the hotkey over a warm session (keepalive, reconnect with backoff, goAway + session resumption); push-to-talk is manual VAD (`activityStart` on press, `activityEnd` on release). If Live fails, the recording goes to REST: `gemini-3.1-flash-lite`, then `gemini-3.5-flash-lite`. A 429 that says *per day* marks that model exhausted until midnight Pacific. Model ids are checked against `GET /v1beta/models` on startup; retired/missing ones are auto-replaced and a notice is shown in Settings. Turn off **Use Live API** to use REST only.
 

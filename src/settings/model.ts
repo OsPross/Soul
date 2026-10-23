@@ -23,6 +23,7 @@ export interface SettingsData {
   commandsModel?: string;
   askModel?: string;
   useLiveApi?: boolean;
+  preferOfflineStt?: boolean;
   language: string;
   microphone: string;
   retiredModels?: string[];

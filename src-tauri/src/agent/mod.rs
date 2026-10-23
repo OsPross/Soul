@@ -1874,6 +1874,16 @@ fn run_tool(
                 scene.name
             ))
         }
+        "call_notes" => {
+            let lang = crate::i18n::ui_lang(&crate::config::load_settings(app).unwrap_or_default());
+            if args.get("action").and_then(Value::as_str) == Some("stop") {
+                crate::notes::stop(app)?;
+                Ok(crate::i18n::tr(lang, "Zatrzymałem nagrywanie. Przygotowuję notatki.", "Recording stopped. Preparing the notes.").into())
+            } else {
+                crate::notes::start(app)?;
+                Ok(crate::i18n::tr(lang, "Nagrywam rozmowę.", "Recording the call.").into())
+            }
+        }
         "now_playing" => Ok(now_playing_text()),
         "morning_briefing" => Ok(morning_briefing()),
         browser::TOOL => browser::run(app, platform, args),

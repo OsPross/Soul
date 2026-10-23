@@ -138,6 +138,26 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     if contains_any(
         lower,
         &[
+            "zatrzymaj nagrywanie spotkania", "zatrzymaj nagrywanie rozmowy", "zakoncz nagrywanie spotkania",
+            "zakoncz nagrywanie rozmowy", "stop recording call", "stop recording the call",
+            "stop recording meeting", "stop recording the meeting",
+        ],
+    ) {
+        return pr("call_notes", json!({ "action": "stop" }), "call_notes_stop");
+    }
+    if contains_any(
+        lower,
+        &[
+            "nagraj spotkanie", "nagraj rozmowe", "nagraj calla", "zacznij nagrywac spotkanie",
+            "zacznij nagrywac rozmowe", "wlacz notetaker", "record a call", "record the call",
+            "record meeting", "record the meeting", "start recording meeting", "start recording the meeting",
+        ],
+    ) {
+        return pr("call_notes", json!({ "action": "start" }), "call_notes_start");
+    }
+    if contains_any(
+        lower,
+        &[
             "anuluj timer", "anuluj minutnik", "anuluj przypomnienie", "wylacz timer",
             "wylacz minutnik", "usun timer", "zatrzymaj timer", "zatrzymaj minutnik",
             "stop timer", "cancel timer", "cancel the timer",
@@ -1121,6 +1141,18 @@ mod tests {
         assert_eq!(match_command("co gra?").unwrap().tool, "now_playing");
         assert_eq!(match_command("Dzień dobry!").unwrap().tool, "morning_briefing");
         assert!(match_command("Dzień dobry, piszę w sprawie faktury za październik").is_none());
+    }
+
+    #[test]
+    fn call_notes_start_and_stop() {
+        for t in ["Nagraj spotkanie", "weź mi nagraj rozmowę.", "zacznij nagrywać spotkanie", "Record a call"] {
+            let r = match_command(t).unwrap();
+            assert_eq!((r.tool.as_str(), r.args["action"].as_str()), ("call_notes", Some("start")), "{t}");
+        }
+        for t in ["Zatrzymaj nagrywanie spotkania", "zakończ nagrywanie spotkania", "stop recording meeting"] {
+            let r = match_command(t).unwrap();
+            assert_eq!((r.tool.as_str(), r.args["action"].as_str()), ("call_notes", Some("stop")), "{t}");
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { motion } from "framer-motion";
 import { useAnim, useAppearance } from "../anim/AnimationProvider";
@@ -361,6 +362,77 @@ function Gesture({ keys, pl, en }: { keys: string[]; pl: string; en: string }) {
 }
 
 // ───────────────────────────── Modele ─────────────────────────────
+interface SpeechModels {
+  installed: boolean;
+  downloading: boolean;
+  downloaded: number;
+  total: number;
+  error: string | null;
+}
+
+/** Local Parakeet + diarizer models (`speech_models_*`): download / remove, offline preference. */
+function SpeechModelCard({ s }: P) {
+  const lang = useLang();
+  const [st, setSt] = useState<SpeechModels | null>(null);
+  useEffect(() => {
+    let alive = true;
+    let unsub: (() => void) | undefined;
+    invoke<SpeechModels>("speech_models_status").then((v) => alive && setSt(v)).catch(() => undefined);
+    listen<SpeechModels>("soul://speech-models", (e) => setSt(e.payload)).then((u) => (alive ? (unsub = u) : u()));
+    return () => {
+      alive = false;
+      unsub?.();
+    };
+  }, []);
+  const mb = (n: number) => `${Math.round(n / 1_000_000)} MB`;
+  const pct = st && st.total > 0 ? Math.floor((st.downloaded / st.total) * 100) : 0;
+  return (
+    <Card
+      title={tr(lang, "Lokalny model mowy (NVIDIA Parakeet · Offline)", "Local speech model (NVIDIA Parakeet · Offline)")}
+      description={tr(
+        lang,
+        "Transkrypcja na tym komputerze, bez internetu — potrzebna do nagrywania spotkań. Gdy preferencja jest wyłączona, Parakeet i tak przejmuje dyktowanie, kiedy Gemini jest nieosiągalne.",
+        "Transcription on this computer, no internet — required for call notes. With the preference off, Parakeet still takes over dictation whenever Gemini is unreachable.",
+      )}
+    >
+      <Row
+        label={
+          !st
+            ? "…"
+            : st.installed
+              ? tr(lang, "✓ Zainstalowany", "✓ Installed")
+              : st.downloading
+                ? tr(lang, `Pobieranie ${pct}%…`, `Downloading ${pct}%…`)
+                : tr(lang, `Brak — ~${mb(st.total)}`, `Not installed — ~${mb(st.total)}`)
+        }
+        hint={st?.error ?? undefined}
+      >
+        {st?.installed ? (
+          <Button onClick={() => invoke("speech_models_remove").catch((e) => s.setError(String(e)))}>
+            {tr(lang, "Usuń modele", "Remove models")}
+          </Button>
+        ) : (
+          <Button variant="primary" disabled={!st || st.downloading} onClick={() => invoke("speech_models_download").catch(() => undefined)}>
+            {tr(lang, "Pobierz", "Download")}
+          </Button>
+        )}
+      </Row>
+      {st?.downloading && (
+        <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full bg-[var(--soul-accent)] transition-[width]" style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      <Row
+        label={tr(lang, "Preferuj lokalny Parakeet offline do dyktowania", "Prefer local offline Parakeet for dictation")}
+        hint={tr(lang, "Bez wysyłania głosu do Gemini.", "Your voice is not sent to Gemini.")}
+        disabled={!st?.installed}
+      >
+        <Toggle checked={s.form.preferOfflineStt ?? false} onChange={(preferOfflineStt) => s.patch({ preferOfflineStt })} />
+      </Row>
+    </Card>
+  );
+}
+
 export function ModelsPage({ s }: P) {
   const lang = useLang();
   const { form, patch, models } = s;
@@ -419,6 +491,7 @@ export function ModelsPage({ s }: P) {
           </Select>
         </Row>
       </Card>
+      <SpeechModelCard s={s} />
       <Card title="REST" description={s.loadingModels ? tr(lang, "Pobieram listę modeli…", "Loading models…") : undefined}>
         <Row label="Circle-to-Ask">
           <Select

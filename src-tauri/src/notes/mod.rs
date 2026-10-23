@@ -119,7 +119,7 @@ pub fn init(app: &AppHandle) {
         .filter_map(|e| std::fs::read(e.path().join("note.json")).ok())
         .filter_map(|b| serde_json::from_slice(&b).ok())
         .collect();
-    notes.sort_by(|a, b| b.created.cmp(&a.created));
+    notes.sort_by_key(|n| std::cmp::Reverse(n.created));
     let unfinished: Vec<String> = notes
         .iter()
         .filter(|n| matches!(n.status, Status::Recording | Status::Processing))

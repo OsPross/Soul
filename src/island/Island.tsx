@@ -24,6 +24,8 @@ import {
 import { playCue, type Cue } from "./sounds";
 import { tr, type UiLang } from "../i18n";
 import { hasPendingUpdate, installUpdate, useUpdate, type UpdateStatus } from "../lib/update";
+import { useNotes } from "../lib/notes";
+import NotesView, { RecBadge } from "../notes/NotesView";
 import { holdsCard, mustCollapseFor, pickStage, type Stage } from "./stage";
 import {
   AGENTS,
@@ -168,7 +170,7 @@ interface ToolChip {
   phase: "start" | "ok" | "error";
 }
 
-type Tab = "now" | "clipboard" | "plans" | "apps" | "agents" | "settings";
+type Tab = "now" | "clipboard" | "plans" | "apps" | "agents" | "calls" | "settings";
 
 const SIZE = {
   idle: { w: 236, h: 40, r: 20 },
@@ -279,6 +281,10 @@ export default function Island() {
   const update = useUpdate();
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const announced = useRef<string | null>(null);
+  const callNotes = useNotes();
+  const recStart = callNotes.recordingNote?.created ?? null;
+  // A recorded call replaces the clock in the collapsed / peek pill.
+  const pillClock: React.ReactNode = recStart !== null ? <RecBadge startedMs={recStart} /> : clock;
 
   useEffect(() => {
     document.documentElement.classList.add("island-root");
@@ -722,6 +728,7 @@ export default function Island() {
           { id: "plans" as const, label: t("tab.plans"), show: sections.plans },
           { id: "apps" as const, label: t("tab.apps"), show: sections.quickApps },
           { id: "agents" as const, label: tr(cfg.uiLang, "Agenci", "Agents"), show: coding.sessions.length > 0 },
+          { id: "calls" as const, label: tr(cfg.uiLang, "Spotkania", "Calls"), show: true },
           { id: "settings" as const, label: t("tab.settings"), show: sections.quickSettings },
         ] satisfies { id: Tab; label: string; show: boolean }[]
       ).filter((x) => x.show),
@@ -803,8 +810,19 @@ export default function Island() {
                   accent={accent}
                   onHeader={collapse}
                   pills={
-                    planPills.length > 0 && (
-                      <div className="flex shrink-0 gap-1">
+                    (planPills.length > 0 || recStart !== null) && (
+                      <div className="flex shrink-0 items-center gap-1">
+                        {recStart !== null && (
+                          // The header click collapses the Island; Stop must not.
+                          <span onClick={(e) => e.stopPropagation()}>
+                            <Press
+                              onClick={() => invoke("notes_stop").catch(() => undefined)}
+                              className="inline-flex items-center gap-1.5 rounded-full border border-[#ff5a5a]/40 px-2.5 py-1 text-[10.5px] font-medium text-[#ff6b6b]"
+                            >
+                              <RecBadge startedMs={recStart} /> · {tr(cfg.uiLang, "Zatrzymaj", "Stop")}
+                            </Press>
+                          </span>
+                        )}
                         {planPills.map((p) => (
                           <PlanPill
                             key={p.id}
@@ -861,6 +879,7 @@ export default function Island() {
                   )}
                   {!planOpen && tab === "apps" && <AppsPanel pinned={pinned} setPinned={setPinned} />}
                   {!planOpen && tab === "agents" && <AgentsPanel sessions={coding.sessions} />}
+                  {!planOpen && tab === "calls" && <NotesView lang={cfg.uiLang} island />}
                   {!planOpen && tab === "settings" && <QuickSettingsPanel />}
                 </Expanded>
               ) : mode === "peek" ? (
@@ -871,7 +890,7 @@ export default function Island() {
                   media={mediaActive}
                   onMedia={onMedia}
                   status={active ? `${statusLabel}${shown.message ? ` — ${shown.message}` : ""}` : null}
-                  clock={clock}
+                  clock={pillClock}
                   onOpen={toggle}
                   update={pending ? update : null}
                   onInstallUpdate={onInstallUpdate}
@@ -889,7 +908,7 @@ export default function Island() {
                   kindText={kindLabel(kind, t)}
                   accent={accent}
                   np={np}
-                  clock={clock}
+                  clock={pillClock}
                   caption={caption}
                   tools={tools}
                   toast={toast}
@@ -1083,7 +1102,7 @@ function Collapsed({
   kindText: string;
   accent: string;
   np: NowPlaying;
-  clock: string;
+  clock: React.ReactNode;
   caption: string | null;
   tools: ToolChip[];
 }) {
@@ -1538,7 +1557,7 @@ function Peek({
   media: boolean;
   onMedia: (a: string) => void;
   status: string | null;
-  clock: string;
+  clock: React.ReactNode;
   onOpen: () => void;
   update: UpdateStatus | null;
   onInstallUpdate: () => void;

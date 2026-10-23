@@ -102,6 +102,17 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
 - `price_watch.rs` – „obserwuj cenę”: memory-DB table `price_watches`, page fetched by Soul (no AI, no Vio tab), price from
   shop metadata or the text after remembered words, checker thread every 3 h → toast + `speak_notice`. Tab scenes reuse
   `scenes.rs` (`open_url` steps). `ai/usage.rs` – REST `generateContent` calls per day (`rest_usage_today`, Settings → About).
+- `speech/` – offline STT: `mod.rs` = pinned Parakeet TDT 0.6B v3 + pyannote/CAM++ diarizer models (`<app data>/models/<id>/`,
+  `speech_models_download` streams `.part` + SHA-256, `soul://speech-models`), lazy `sherpa-onnx` recognizer/diarizer,
+  `transcribe` (28 s chunks) / `diarize` / `wav_samples`. `audio.rs` = call capture thread (`Source::Mic` / `Source::System`:
+  WASAPI loopback via cpal's output device, Linux `.monitor`), 32-tap sinc `Resampler`, `split_for_model`, `WavWriter`/`read_wav`.
+  `preferOfflineStt` (+ `speech::is_ready`) skips the Live socket in `talk::begin_capture`; `transcribe_turn` falls back to
+  Parakeet when Live and REST both fail.
+- `notes/` – call notetaker: `builder.rs` pure (assign words to turns, `lines`, `removing_echo`, `build`/`build_room`,
+  `parse_summary`, `markdown`); `mod.rs` = `<app data>/notes/<id>/note.json` (atomic), mic.wav + system.wav, live worker,
+  `process` after stop / on startup for unfinished notes (WAVs deleted), Gemini summary + Island toast, `notes_*` commands,
+  `soul://notes-changed` / `island://note-recording`. Router `call_notes {action}`; wake word pauses while recording.
+  Frontend: `src/lib/notes.ts`, `src/notes/NotesView.tsx` (Island tab „Spotkania” + Settings page).
 - `memory.rs` – local SQLite (`rusqlite` bundled, `soul-memory.db` in the app data dir): facts + notes (`notatka`),
   scenes, app launches. `prompt_facts` injects max 15 facts (keyword + recency; stable order for the warm Live session —
   a changed prompt reconnects it, so call `memory_changed` after edits). Refuses secrets; `extract_fact` = auto-remember.

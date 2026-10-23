@@ -8,6 +8,16 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Notatki ze spotkań (Call Notetaker).** „Nagraj spotkanie” (voice, Island → Spotkania or
+  Settings → Spotkania) records your mic and the computer's audio, shows a live transcript and a
+  pulsing `● REC` on the Island. After „Zatrzymaj nagrywanie spotkania” the call is transcribed
+  locally with speaker labels (your voice leaking from the speakers into the mic is removed), the
+  recordings are deleted, and Gemini writes a title, summary, key points and to-dos. Rename speakers,
+  tick to-dos, copy or export Markdown to Documents. The wake word pauses while a call is recorded.
+- **Lokalny model mowy (NVIDIA Parakeet, offline).** Settings → Modele downloads Parakeet TDT 0.6B v3
+  and a speaker diarizer (~700 MB, checksum-verified). Optional: prefer it for dictation (your voice
+  stays on the computer); otherwise it takes over automatically when Gemini is unreachable.
+
 - **Agenci kodujący na wyspie (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI).** Soul can
   install `soul --agent-hook` hooks into each agent's config (diff preview, dated backup, your other
   hooks and status line untouched). The hook never blocks the agent: without Soul it exits at once.
