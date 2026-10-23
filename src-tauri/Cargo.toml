@@ -60,6 +60,7 @@ xcap = { version = "0.9", default-features = false }
 windows = { version = "0.58", features = [
   "Foundation",
   "Foundation_Collections",
+  "Media",
   "Media_Control",
   "Storage_Streams",
   "Win32_Foundation",

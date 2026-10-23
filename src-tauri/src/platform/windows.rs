@@ -335,17 +335,20 @@ pub(super) fn lower_current_thread_priority() {
     }
 }
 
-fn duck_sessions(factor: Option<f32>) -> Result<(), String> {
+/// Run `f(pid, session, volume)` for every WASAPI session on the default output. Blocking.
+fn for_each_audio_session(
+    mut f: impl FnMut(
+        u32,
+        &windows::Win32::Media::Audio::IAudioSessionControl2,
+        &windows::Win32::Media::Audio::ISimpleAudioVolume,
+    ),
+) -> Result<(), String> {
     use windows::core::Interface;
     use windows::Win32::Media::Audio::{
         eMultimedia, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
         ISimpleAudioVolume, MMDeviceEnumerator,
     };
-    use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
-    };
-    let own = std::process::id();
-    let mut saved = DUCKED.lock();
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         let enumerator: IMMDeviceEnumerator =
@@ -364,36 +367,109 @@ fn duck_sessions(factor: Option<f32>) -> Result<(), String> {
         for i in 0..count {
             let Ok(control) = sessions.GetSession(i) else { continue };
             let Ok(control2) = control.cast::<IAudioSessionControl2>() else { continue };
-            let pid = control2.GetProcessId().unwrap_or(0);
-            // pid 0 = system sounds; never duck Soul's own reply.
-            if pid == 0 || pid == own {
-                continue;
-            }
-            let Ok(id_ptr) = control2.GetSessionInstanceIdentifier() else { continue };
-            let id = id_ptr.to_string().unwrap_or_default();
-            CoTaskMemFree(Some(id_ptr.0 as *const _));
             let Ok(volume) = control.cast::<ISimpleAudioVolume>() else { continue };
-            match factor {
-                Some(f) => {
-                    if saved.iter().any(|(s, _)| *s == id) {
-                        continue;
-                    }
-                    let Ok(level) = volume.GetMasterVolume() else { continue };
-                    if volume.SetMasterVolume(level * f, std::ptr::null()).is_ok() {
-                        saved.push((id, level));
-                    }
+            f(control2.GetProcessId().unwrap_or(0), &control2, &volume);
+        }
+    }
+    Ok(())
+}
+
+fn duck_sessions(factor: Option<f32>) -> Result<(), String> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    let own = std::process::id();
+    let mut saved = DUCKED.lock();
+    for_each_audio_session(|pid, control2, volume| unsafe {
+        // pid 0 = system sounds; never duck Soul's own reply.
+        if pid == 0 || pid == own {
+            return;
+        }
+        let Ok(id_ptr) = control2.GetSessionInstanceIdentifier() else { return };
+        let id = id_ptr.to_string().unwrap_or_default();
+        CoTaskMemFree(Some(id_ptr.0 as *const _));
+        match factor {
+            Some(f) => {
+                if saved.iter().any(|(s, _)| *s == id) {
+                    return;
                 }
-                None => {
-                    if let Some(pos) = saved.iter().position(|(s, _)| *s == id) {
-                        let (_, level) = saved.remove(pos);
-                        let _ = volume.SetMasterVolume(level, std::ptr::null());
-                    }
+                let Ok(level) = volume.GetMasterVolume() else { return };
+                if volume.SetMasterVolume(level * f, std::ptr::null()).is_ok() {
+                    saved.push((id, level));
+                }
+            }
+            None => {
+                if let Some(pos) = saved.iter().position(|(s, _)| *s == id) {
+                    let (_, level) = saved.remove(pos);
+                    let _ = volume.SetMasterVolume(level, std::ptr::null());
                 }
             }
         }
-    }
+    })?;
     if factor.is_none() {
         saved.clear();
+    }
+    Ok(())
+}
+
+/// Mixer volume (0.0–1.0) of the audio sessions owned by `exe` (e.g. "spotify.exe"); `set`
+/// changes every one of them first. `Ok(None)` = the app has no audio session.
+pub(crate) fn app_volume(exe: &str, set: Option<f32>) -> Result<Option<f32>, String> {
+    let mut level = None;
+    for_each_audio_session(|pid, _, volume| unsafe {
+        if !pid_is_exe(pid, exe) {
+            return;
+        }
+        if let Some(v) = set {
+            let _ = volume.SetMasterVolume(v.clamp(0.0, 1.0), std::ptr::null());
+        }
+        if level.is_none() {
+            level = volume.GetMasterVolume().ok();
+        }
+    })?;
+    Ok(level)
+}
+
+fn pid_is_exe(pid: u32, exe: &str) -> bool {
+    pid != 0
+        && process_path(pid).is_some_and(|p| {
+            std::path::Path::new(&p)
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(exe))
+        })
+}
+
+/// Whether a process named `exe` (case-insensitive) is running.
+pub(crate) fn process_running(exe: &str) -> bool {
+    process_list().iter().any(|p| p.exe.eq_ignore_ascii_case(exe))
+}
+
+/// Open `uri` (e.g. `spotify:search:…`) and, if `exe`'s window takes the foreground within 1.2 s,
+/// hand the foreground back to the previous window and minimise it without activating it.
+pub(crate) fn open_uri_in_background(uri: &str, exe: &str) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, ShowWindowAsync,
+        SW_SHOWMINNOACTIVE,
+    };
+    // SAFETY: plain window-handle queries; no memory is passed.
+    let prev = unsafe { GetForegroundWindow() };
+    shell_open(uri)?;
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(40));
+        let fg = unsafe { GetForegroundWindow() };
+        if fg == prev || fg.0.is_null() {
+            continue;
+        }
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(fg, Some(&mut pid)) };
+        if pid_is_exe(pid, exe) {
+            unsafe {
+                if !prev.0.is_null() {
+                    let _ = SetForegroundWindow(prev);
+                }
+                let _ = ShowWindowAsync(fg, SW_SHOWMINNOACTIVE);
+            }
+            break;
+        }
     }
     Ok(())
 }
@@ -774,37 +850,24 @@ public class SoulAudio {{
     }
 
     fn media_control(&self, action: &str) -> Result<String, String> {
-        // VK_MEDIA_PLAY_PAUSE=0xB3, VK_MEDIA_NEXT_TRACK=0xB0, VK_MEDIA_PREV_TRACK=0xB1
-        let (vk, label) = match action.trim().to_ascii_lowercase().as_str() {
-            "play" | "pause" | "play_pause" | "playpause" => (0xB3u32, "Play/Pause"),
-            "next" => (0xB0, "Next track"),
-            "prev" | "previous" => (0xB1, "Previous track"),
-            other => {
-                return Err(format!(
-                    "Unknown media action '{other}'. Use play, pause, next, or prev."
-                ));
-            }
+        // GSMTC session control first (no PowerShell spawn); a media key only when no session exists.
+        let key = match action.trim().to_ascii_lowercase().as_str() {
+            "play" | "pause" | "play_pause" | "playpause" | "toggle" => Some((Key::MediaPlayPause, "Play/Pause")),
+            "next" => Some((Key::MediaNextTrack, "Next track")),
+            "prev" | "previous" => Some((Key::MediaPrevTrack, "Previous track")),
+            _ => None,
         };
-        let script = format!(
-            r#"
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class SoulMedia {{
-  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-}}
-"@
-[SoulMedia]::keybd_event({vk}, 0, 0, [UIntPtr]::Zero)
-[SoulMedia]::keybd_event({vk}, 0, 2, [UIntPtr]::Zero)
-"#
-        );
-        let status = powershell(&script)
-            .status()
-            .map_err(|e| format!("Media key failed: {e}"))?;
-        if status.success() {
-            Ok(label.into())
-        } else {
-            Err("Media key simulation failed.".into())
+        match (crate::island::media::media_action_async(action.to_string()), key) {
+            (Ok(done), _) => Ok(done),
+            (Err(_), Some((key, label))) => {
+                let mut enigo = Enigo::new(&Settings::default())
+                    .map_err(|e| format!("Failed to init input simulation: {e}"))?;
+                enigo
+                    .key(key, Direction::Click)
+                    .map_err(|e| format!("Media key failed: {e}"))?;
+                Ok(label.into())
+            }
+            (Err(e), None) => Err(e),
         }
     }
 

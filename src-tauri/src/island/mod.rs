@@ -14,7 +14,7 @@
 pub(crate) mod clipboard;
 pub mod debug_log;
 pub mod drop;
-mod media;
+pub(crate) mod media;
 pub mod plan;
 mod watchdog;
 

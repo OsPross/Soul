@@ -15,6 +15,7 @@ mod platform;
 mod price_watch;
 mod scenes;
 mod speech;
+mod spotify;
 mod talk;
 mod timers;
 mod updater;
