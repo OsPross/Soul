@@ -25,13 +25,13 @@ const RELAY_FLAG: &str = "--claude-statusline";
 // ───────────────────────────── processes ─────────────────────────────
 
 #[cfg(windows)]
-fn command(program: &Path) -> Command {
+pub(crate) fn command(program: &Path) -> Command {
     crate::platform::windows::hidden_command(&program.to_string_lossy())
 }
 
 #[cfg(not(windows))]
 #[allow(clippy::disallowed_methods)] // no console window to flash outside Windows
-fn command(program: &Path) -> Command {
+pub(crate) fn command(program: &Path) -> Command {
     Command::new(program)
 }
 
@@ -46,7 +46,7 @@ fn kill_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn find_on_path(name: &str) -> Option<PathBuf> {
+pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
     let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
     std::env::split_paths(&std::env::var_os("PATH")?)
         .flat_map(|dir| exts.iter().map(move |e| dir.join(format!("{name}{e}"))))
@@ -209,7 +209,7 @@ pub async fn codex_plan_usage() -> Result<Value, String> {
 // ───────────────────────────── Claude statusLine relay ─────────────────────────────
 
 /// Tauri's `app_data_dir` without Tauri (the relay exits before the app is built).
-fn data_dir_standalone() -> Option<PathBuf> {
+pub(crate) fn data_dir_standalone() -> Option<PathBuf> {
     #[cfg(windows)]
     let base = env_path("APPDATA");
     #[cfg(not(windows))]
@@ -221,11 +221,11 @@ fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-fn strip_bom(b: &[u8]) -> &[u8] {
+pub(crate) fn strip_bom(b: &[u8]) -> &[u8] {
     b.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(b)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
@@ -335,7 +335,7 @@ fn run_previous(cmd: &str, input: &[u8]) -> Option<Vec<u8>> {
     rx.recv_timeout(Duration::from_millis(200)).ok()
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     if cfg!(windows) {
         env_path("USERPROFILE")
     } else {

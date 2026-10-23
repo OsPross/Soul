@@ -7,5 +7,10 @@ fn main() {
         soul_lib::claude_statusline();
         std::process::exit(0);
     }
+    // Coding agent hook relay (`coding_agents/relay.rs`): must never block the agent.
+    if std::env::args().skip(1).any(|a| a == "--agent-hook") {
+        soul_lib::coding_agents::relay::run_cli();
+        std::process::exit(0);
+    }
     soul_lib::run()
 }

@@ -31,11 +31,12 @@ static ANSWERING: AtomicBool = AtomicBool::new(false);
 
 const YES: &[&str] = &[
     "tak", "potwierdz", "potwierdzam", "jasne", "pewnie", "oczywiscie", "ok", "okej", "okay", "dobra",
-    "dawaj", "zgoda", "zamknij", "zamykaj", "yes", "yeah", "yep", "sure", "confirm", "confirmed",
+    "dawaj", "zgoda", "zamknij", "zamykaj", "yes", "yeah", "yep", "sure", "confirm", "confirmed", "zezwol",
+    "zezwalaj", "allow",
 ];
 const NO: &[&str] = &[
     "nie", "niee", "anuluj", "anulujemy", "anulowac", "cancel", "stop", "nope", "zostaw", "przestan",
-    "czekaj", "wroc",
+    "czekaj", "wroc", "odrzuc", "deny",
 ];
 
 /// „Tak” → Some(true), „nie, zostaw” → Some(false), anything else → None. A negative word wins
@@ -56,14 +57,20 @@ pub fn overlay_allowed(pending: bool, state: &str) -> bool {
     !pending || state == "confirm" || state == "question"
 }
 
-pub fn is_pending(app: &AppHandle) -> bool {
+/// Soul's own confirm / question card waits.
+pub fn soul_pending(app: &AppHandle) -> bool {
     app.try_state::<AppState>()
         .is_some_and(|s| s.agent.pending_confirm.lock().is_some())
 }
 
+/// The talk key records a spoken answer: Soul's card or a coding agent approval on the Island.
+pub fn is_pending(app: &AppHandle) -> bool {
+    soul_pending(app) || crate::coding_agents::pipe::has_pending_approval(app)
+}
+
 /// `emit_overlay` / `schedule_hide` must leave the confirm card alone.
 pub fn blocks_overlay(app: &AppHandle, state: &str) -> bool {
-    !overlay_allowed(is_pending(app), state)
+    !overlay_allowed(soul_pending(app), state)
 }
 
 /// Island button / Esc / voice: resolve the pending confirmation.
@@ -211,6 +218,17 @@ pub fn on_answer_released(app: &AppHandle) {
         live.dictation.finish_turn();
         let text = heard.map(|h| h.text).unwrap_or_default();
         crate::island::set_activity(crate::island::Activity::Command);
+        // A coding agent approval on the Island (Soul's own card, if any, goes first).
+        if !soul_pending(&app) && crate::coding_agents::pipe::has_pending_approval(&app) {
+            match parse_answer(&text) {
+                Some(accepted) => {
+                    eprintln!("[soul][agent] coding approval answered by voice accepted={accepted}");
+                    crate::coding_agents::pipe::answer_active(&app, if accepted { "allow" } else { "deny" });
+                }
+                None => eprintln!("[soul][agent] coding approval: no yes/no in the spoken answer ({} chars)", text.chars().count()),
+            }
+            return;
+        }
         // A free-text question takes the whole answer.
         let question = app
             .state::<AppState>()
@@ -264,6 +282,12 @@ mod tests {
 
     #[test]
     fn spoken_answers() {
+        for t in ["Zezwól", "zezwalaj", "allow"] {
+            assert_eq!(parse_answer(t), Some(true), "{t}");
+        }
+        for t in ["Odrzuć", "deny"] {
+            assert_eq!(parse_answer(t), Some(false), "{t}");
+        }
         for t in ["Tak", "tak.", "Potwierdź", "potwierdzam", "No tak", "no dobra", "Okej", "Tak, zamknij go", "Soul, tak", "yes", "Confirm"] {
             assert_eq!(parse_answer(t), Some(true), "{t}");
         }

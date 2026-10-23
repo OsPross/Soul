@@ -697,7 +697,7 @@ pub fn stop_all(app: &AppHandle, why: &str) -> bool {
     if let Some(c) = vio::global() {
         c.cancel_all();
     }
-    let confirm = super::confirm::is_pending(app);
+    let confirm = super::confirm::soul_pending(app);
     if confirm {
         let _ = super::confirm::answer(app, false);
     }

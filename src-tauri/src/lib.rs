@@ -3,6 +3,7 @@ mod ai;
 mod ask;
 mod audio;
 mod capture;
+pub mod coding_agents;
 mod config;
 mod e2e;
 mod i18n;
@@ -691,6 +692,15 @@ pub fn run() {
             island::plan::claude_plan_status,
             island::plan::claude_plan_preview,
             island::plan::claude_plan_apply,
+            coding_agents::pipe::coding_agent_ack,
+            coding_agents::pipe::coding_agent_decide,
+            coding_agents::pipe::coding_agent_decline,
+            coding_agents::pipe::coding_agent_answer_question,
+            coding_agents::session_window::coding_agent_focus_terminal,
+            coding_agents::session_window::coding_agent_open_file,
+            coding_agents::installer::coding_agents_status,
+            coding_agents::installer::coding_agents_preview,
+            coding_agents::installer::coding_agents_apply,
             memory_list,
             memory_add,
             memory_update,
@@ -739,6 +749,7 @@ pub fn run() {
                 eprintln!("[soul][memory] unavailable: {e}");
             }
             island::init(app.handle());
+            coding_agents::pipe::start(app.handle().clone());
             timers::start_worker(app.handle().clone());
             updater::init(app.handle());
             app.state::<AppState>().voice.attach(app.handle().clone());
@@ -1505,7 +1516,7 @@ pub(crate) fn schedule_hide(app: &AppHandle, delay_ms: u64) {
     let shown = OVERLAY_GEN.load(Ordering::SeqCst);
     thread::spawn(move || {
         thread::sleep(std::time::Duration::from_millis(delay_ms));
-        if OVERLAY_GEN.load(Ordering::SeqCst) != shown || agent::confirm::is_pending(&app) {
+        if OVERLAY_GEN.load(Ordering::SeqCst) != shown || agent::confirm::soul_pending(&app) {
             // Something newer is on screen (next turn, spoken reply, a confirmation) — leave it.
             return;
         }

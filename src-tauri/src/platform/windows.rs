@@ -113,13 +113,13 @@ impl WindowsPlatform {
 const CLOSE_GRACE: Duration = Duration::from_secs(3);
 
 /// A visible, unowned top-level window.
-struct TopWindow {
-    hwnd: isize,
-    pid: u32,
-    title: String,
+pub(crate) struct TopWindow {
+    pub hwnd: isize,
+    pub pid: u32,
+    pub title: String,
 }
 
-fn top_windows() -> Vec<TopWindow> {
+pub(crate) fn top_windows() -> Vec<TopWindow> {
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, GW_OWNER,
@@ -149,7 +149,7 @@ fn top_windows() -> Vec<TopWindow> {
 }
 
 /// Every process (pid, parent, exe name) via a Toolhelp snapshot.
-fn process_list() -> Vec<close::Proc> {
+pub(crate) fn process_list() -> Vec<close::Proc> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -951,6 +951,76 @@ fn close_app_probe() {
     assert!(t0.elapsed() < Duration::from_secs(4));
 }
 
+// ───────────────────────────── coding agents (named pipe, terminal jump) ─────────────────────────────
+
+/// String SID (`S-1-5-21-…`) of the user running `pid` (`None` = this process).
+pub(crate) fn user_sid(pid: Option<u32>) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+    use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+    use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: every handle is closed; the token buffer is u64-aligned and sized by the first call;
+    // the SID string is freed with LocalFree.
+    unsafe {
+        let process = match pid {
+            Some(pid) => OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?,
+            None => GetCurrentProcess(),
+        };
+        let mut token = HANDLE::default();
+        let opened = OpenProcessToken(process, TOKEN_QUERY, &mut token);
+        if pid.is_some() {
+            let _ = CloseHandle(process);
+        }
+        opened.ok()?;
+        let mut len = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
+        let got = GetTokenInformation(token, TokenUser, Some(buf.as_mut_ptr().cast()), len, &mut len);
+        let _ = CloseHandle(token);
+        got.ok()?;
+        let user = &*(buf.as_ptr() as *const TOKEN_USER);
+        let mut s = PWSTR::null();
+        ConvertSidToStringSidW(user.User.Sid, &mut s).ok()?;
+        let sid = s.to_string().ok();
+        let _ = LocalFree(HLOCAL(s.0.cast()));
+        sid
+    }
+}
+
+/// The process on the other end of a named pipe (`server` = ask for the server's pid).
+pub(crate) fn pipe_peer_pid(handle: isize, server: bool) -> Option<u32> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
+    let h = HANDLE(handle as *mut core::ffi::c_void);
+    let mut pid = 0u32;
+    // SAFETY: the caller owns the pipe handle for the duration of the call.
+    let ok = unsafe {
+        if server {
+            GetNamedPipeServerProcessId(h, &mut pid)
+        } else {
+            GetNamedPipeClientProcessId(h, &mut pid)
+        }
+    };
+    ok.ok().map(|_| pid)
+}
+
+/// Restore (if minimized) and bring a top-level window to the front.
+pub(crate) fn focus_hwnd(hwnd: isize) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE};
+    let hwnd = HWND(hwnd as *mut core::ffi::c_void);
+    // SAFETY: user32 validates the handle.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+        SetForegroundWindow(hwnd).as_bool()
+    }
+}
+
 /// Opt-in check that Soul's spawns never show a console window (the "włącz Spotify" flash).
 ///   cargo test --manifest-path src-tauri/Cargo.toml --release --lib console_probe -- --ignored --nocapture --test-threads=1
 /// The test detaches from its console first (`FreeConsole`), like the GUI-subsystem release app —
@@ -1073,3 +1143,4 @@ mod console_probe {
         assert_eq!(total, 0, "console windows appeared");
     }
 }
+
