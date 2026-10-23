@@ -8,6 +8,9 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Słownik i snippety (Settings → Pamięć).** Dictation keeps your dictionary words spelled exactly,
+  applies word replacements („cloud code” → „Claude Code”), and a spoken snippet phrase („mój podpis”)
+  pastes its whole text unchanged.
 - **Soul Agent + Vio browser.** When the Vio browser's automation API is on, browser tasks go
   through it instead of the screen: faster and exact, no mouse. „otwórz w przeglądarce
   youtube.com”, „przeczytaj / streść tę stronę”, „wypełnij formularz”, „sprawdź które pola są
@@ -40,6 +43,10 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- **Dictation paste:** the pasted text no longer shows up in Win+V / cloud clipboard or the Island's
+  clipboard history, waits until you release the talk key's modifiers (no more Ctrl+Alt+V), and your
+  previous clipboard is restored later (slow apps like Word got the old text) — unless you copied
+  something new meanwhile.
 - **Island (Windows):** clicking the Island no longer takes focus from your app, clicks next to it
   go through to the window below, and expanding / collapsing no longer resizes the native window
   (no more stutter or clipped panel). A click outside closes it; it fixes itself after a DPI change.

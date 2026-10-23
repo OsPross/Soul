@@ -85,6 +85,22 @@ impl Default for IslandSections {
     }
 }
 
+/// Dictation: spoken `from` is written as `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacementRule {
+    pub from: String,
+    pub to: String,
+}
+
+/// Dictation: saying `trigger` pastes `text` verbatim (never touched by cleanup).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceSnippet {
+    pub trigger: String,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -125,6 +141,13 @@ pub struct Settings {
     /// Pinned app names for Island Quick apps (fuzzy-matched via open_app).
     #[serde(default)]
     pub pinned_apps: Vec<String>,
+    /// Dictation dictionary: words whose spelling / casing is kept exactly.
+    #[serde(default)]
+    pub custom_words: Vec<String>,
+    #[serde(default)]
+    pub replacements: Vec<ReplacementRule>,
+    #[serde(default)]
+    pub snippets: Vec<VoiceSnippet>,
     /// "smart" (one talk key, auto-routing) or "separate" (dictation + command combos).
     #[serde(default = "default_talk_mode")]
     pub talk_mode: String,
@@ -258,6 +281,9 @@ impl Default for Settings {
             island_position: IslandPosition::TopCenter,
             island_sections: IslandSections::default(),
             pinned_apps: Vec::new(),
+            custom_words: Vec::new(),
+            replacements: Vec::new(),
+            snippets: Vec::new(),
             talk_mode: DEFAULT_TALK_MODE.to_string(),
             talk_key: DEFAULT_TALK_KEY.to_string(),
             talk_key_swallow: false,
@@ -409,6 +435,15 @@ pub fn load_settings<R: Runtime>(app: &AppHandle<R>) -> Result<Settings, String>
                 .filter_map(|x| x.as_str().map(|s| s.to_string()))
                 .collect();
         }
+    }
+    if let Some(v) = store.get("customWords") {
+        settings.custom_words = serde_json::from_value(v.clone()).unwrap_or_default();
+    }
+    if let Some(v) = store.get("replacements") {
+        settings.replacements = serde_json::from_value(v.clone()).unwrap_or_default();
+    }
+    if let Some(v) = store.get("snippets") {
+        settings.snippets = serde_json::from_value(v.clone()).unwrap_or_default();
     }
 
     let str_or = |key: &str, default: &str| -> String {
@@ -616,6 +651,9 @@ pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Res
                 .collect(),
         ),
     );
+    store.set("customWords", serde_json::to_value(&settings.custom_words).unwrap_or_default());
+    store.set("replacements", serde_json::to_value(&settings.replacements).unwrap_or_default());
+    store.set("snippets", serde_json::to_value(&settings.snippets).unwrap_or_default());
     store.set("talkMode", serde_json::Value::String(settings.talk_mode.clone()));
     store.set("talkKey", serde_json::Value::String(settings.talk_key.clone()));
     store.set("talkKeySwallow", serde_json::Value::Bool(settings.talk_key_swallow));
@@ -654,7 +692,7 @@ pub fn save_settings<R: Runtime>(app: &AppHandle<R>, settings: &Settings) -> Res
 
 /// Returns a redacted view safe for logging (never includes the raw API key).
 pub fn redact_settings(settings: &Settings) -> serde_json::Value {
-    serde_json::json!({
+    let mut out = serde_json::json!({
         "apiKeySet": !settings.api_key.is_empty(),
         "hotkey": settings.hotkey,
         "askHotkey": settings.ask_hotkey,
@@ -698,5 +736,10 @@ pub fn redact_settings(settings: &Settings) -> serde_json::Value {
         "autoUpdate": settings.auto_update,
         "updateChannel": settings.update_channel,
         "appearanceSet": settings.appearance.is_object(),
-    })
+    });
+    // Counts only: snippets may hold addresses, signatures, phone numbers.
+    out["customWords"] = settings.custom_words.len().into();
+    out["replacements"] = settings.replacements.len().into();
+    out["snippets"] = settings.snippets.len().into();
+    out
 }

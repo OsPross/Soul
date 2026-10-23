@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AnimatePresence, motion } from "framer-motion";
@@ -253,7 +253,119 @@ export function MemoryPage({ s }: P) {
           </ul>
         )}
       </Card>
+
+      <DictionaryCard s={s} />
     </>
+  );
+}
+
+/** Dictation dictionary, word replacements and voice snippets (saved with the Save bar). */
+function DictionaryCard({ s }: P) {
+  const lang = useAnim().cfg.uiLang;
+  const { form, patch } = s;
+  const words = form.customWords ?? [];
+  const rules = form.replacements ?? [];
+  const snippets = form.snippets ?? [];
+  const [word, setWord] = useState("");
+  const [rule, setRule] = useState({ from: "", to: "" });
+  const [snippet, setSnippet] = useState({ trigger: "", text: "" });
+  const input = "soul-input min-w-0 flex-1 px-3 py-2 text-[13px]";
+  const chip = "flex items-center gap-2 rounded-xl bg-white/[0.05] px-3 py-1.5 text-[12.5px] text-white/85";
+  const remove = (onClick: () => void) => (
+    <button type="button" onClick={onClick} className="ml-auto shrink-0 text-[11.5px] text-[var(--soul-danger)]/80 hover:text-[var(--soul-danger)]">
+      {tr(lang, "Usuń", "Delete")}
+    </button>
+  );
+
+  const addWord = () => {
+    const w = word.trim();
+    if (!w || words.includes(w)) return;
+    patch({ customWords: [...words, w] });
+    setWord("");
+  };
+  const addRule = () => {
+    if (!rule.from.trim() || !rule.to.trim()) return;
+    patch({ replacements: [...rules, { from: rule.from.trim(), to: rule.to.trim() }] });
+    setRule({ from: "", to: "" });
+  };
+  const addSnippet = () => {
+    if (!snippet.trigger.trim() || !snippet.text.trim()) return;
+    patch({ snippets: [...snippets, { trigger: snippet.trigger.trim(), text: snippet.text }] });
+    setSnippet({ trigger: "", text: "" });
+  };
+  const onEnter = (fn: () => void) => (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      fn();
+    }
+  };
+
+  return (
+    <Card
+      title={tr(lang, "Słownik i snippety", "Dictionary & snippets")}
+      description={tr(
+        lang,
+        "Tylko dyktowanie. Słowa ze słownika są zawsze pisane dokładnie tak. Snippet: powiedz frazę, a Soul wklei cały tekst bez zmian.",
+        "Dictation only. Dictionary words are always spelled exactly like this. Snippet: say the phrase and Soul pastes the whole text unchanged.",
+      )}
+    >
+      <Row stacked label={tr(lang, "Słownik", "Dictionary")}>
+        <div className="flex items-center gap-2">
+          <input value={word} onChange={(e) => setWord(e.target.value)} onKeyDown={onEnter(addWord)} placeholder={tr(lang, "np. Supabase", "e.g. Supabase")} className={input} />
+          <Button onClick={addWord} disabled={!word.trim()}>{tr(lang, "Dodaj", "Add")}</Button>
+        </div>
+        {words.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {words.map((w) => (
+              <span key={w} className={chip}>
+                {w}
+                {remove(() => patch({ customWords: words.filter((x) => x !== w) }))}
+              </span>
+            ))}
+          </div>
+        )}
+      </Row>
+
+      <Row stacked label={tr(lang, "Zamiany", "Replacements")}>
+        <div className="flex items-center gap-2">
+          <input value={rule.from} onChange={(e) => setRule({ ...rule, from: e.target.value })} onKeyDown={onEnter(addRule)} placeholder={tr(lang, "słyszę: cloud code", "heard: cloud code")} className={input} />
+          <span className="text-white/40">→</span>
+          <input value={rule.to} onChange={(e) => setRule({ ...rule, to: e.target.value })} onKeyDown={onEnter(addRule)} placeholder={tr(lang, "piszę: Claude Code", "write: Claude Code")} className={input} />
+          <Button onClick={addRule} disabled={!rule.from.trim() || !rule.to.trim()}>{tr(lang, "Dodaj", "Add")}</Button>
+        </div>
+        {rules.length > 0 && (
+          <ul className="mt-2 flex flex-col gap-1">
+            {rules.map((r, i) => (
+              <li key={`${r.from}-${i}`} className={chip}>
+                <span className="truncate">{r.from} → {r.to}</span>
+                {remove(() => patch({ replacements: rules.filter((_, j) => j !== i) }))}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+
+      <Row stacked label={tr(lang, "Snippety", "Snippets")}>
+        <div className="flex flex-col gap-2">
+          <input value={snippet.trigger} onChange={(e) => setSnippet({ ...snippet, trigger: e.target.value })} placeholder={tr(lang, "fraza, np. mój podpis", "phrase, e.g. my signature")} className={input} />
+          <textarea value={snippet.text} onChange={(e) => setSnippet({ ...snippet, text: e.target.value })} rows={3} placeholder={tr(lang, "Tekst do wklejenia", "Text to paste")} className={`${input} resize-y`} />
+          <div className="flex justify-end">
+            <Button onClick={addSnippet} disabled={!snippet.trigger.trim() || !snippet.text.trim()}>{tr(lang, "Dodaj snippet", "Add snippet")}</Button>
+          </div>
+        </div>
+        {snippets.length > 0 && (
+          <ul className="mt-2 flex flex-col gap-1">
+            {snippets.map((sn, i) => (
+              <li key={`${sn.trigger}-${i}`} className={chip}>
+                <span className="shrink-0 font-medium">„{sn.trigger}”</span>
+                <span className="truncate text-white/50">{sn.text.replace(/\s+/g, " ")}</span>
+                {remove(() => patch({ snippets: snippets.filter((_, j) => j !== i) }))}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Row>
+    </Card>
   );
 }
 

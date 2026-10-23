@@ -37,6 +37,8 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   session resumption (commands). PTT = manual VAD (`activityStart`/`activityEnd`). Non-blocking handle API;
   `collect_dictation` waits for the final transcript. `live_smoke.rs` = opt-in real-API test (`SOUL_TEST_KEY`).
 - `ai/cleanup.rs` – dictation cleanup: local filler removal + LLM pass only when a self-correction is detected.
+  `prepare_dictation` (settings `customWords` / `replacements` / `snippets`): snippet triggers → `⟦n⟧` marks, an LLM
+  output that drops a mark is rejected (`keeps_marks`), `finish_dictation` puts the snippet text back right before paste.
 - `ai/quota.rs` – per-model daily 429 exhaustion tracking until midnight Pacific.
 - `agent/mod.rs` – voice-command session + tool dispatch (`close_app` requires Confirm/Cancel, 5 s hard limit), spoken-reply
   draining + barge-in. `local_dispatch` runs before any model, in order: context reset („nowy temat”/„zapomnij”) →
@@ -137,7 +139,9 @@ consoles, waits on `GetClipboardSequenceNumber`, restores text/image clipboard; 
 `activate_window` (refocus the app after an Island click), `send_undo`. `create_platform()` returns `Arc<dyn Platform>`:
 `windows.rs` on Windows; on Linux `linux_x11.rs`, or `linux_wayland.rs` when `WAYLAND_DISPLAY`/`XDG_SESSION_TYPE=wayland`.
 Platform-specific code lives only in these files (behind `#[cfg(target_os)]`); everything else must stay portable.
-`platform::clipboard::with_temporary_text` pastes then restores the previous clipboard. `apps.rs` = fuzzy app index.
+`platform::clipboard::with_temporary_text` pastes (one persistent arboard handle, text excluded from Win+V / cloud /
+clipboard managers, waits for modifiers to be released) and restores the previous text 700 ms later in the background only if
+the clipboard still holds Soul's text; `island::clipboard::note_internal_paste` keeps both out of the Island history. `apps.rs` = fuzzy app index.
 `close.rs` = portable `close_app`/`focus_app` target resolution over a process snapshot: known-apps alias map → exe stem /
 product name → window title (last resort), then climb to the app's root process (never a helper); `tree` = kill order.
 Windows: Toolhelp + EnumWindows (UTF-16 titles), quit URL (`steam://exit`) or WM_CLOSE, 3 s grace, then TerminateProcess

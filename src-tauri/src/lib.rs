@@ -1203,8 +1203,15 @@ fn paste_dictation(
     heard: Heard,
     released: Instant,
 ) -> Result<String, String> {
-    let text = if heard.live {
-        let cleaned = ai::cleanup::local_cleanup(&heard.text);
+    let base = if heard.live { ai::cleanup::local_cleanup(&heard.text) } else { heard.text };
+    let prepared = ai::cleanup::prepare_dictation(
+        &base,
+        &settings.custom_words,
+        &settings.replacements,
+        &settings.snippets,
+    );
+    let cleaned = prepared.text.clone();
+    let written = if heard.live {
         if ai::cleanup::needs_llm_cleanup(&cleaned) {
             let rest_fallback = resolve_fallback_model(settings, &ai::gemini::cached_models());
             let client = GeminiClient::new(&settings.api_key, settings.effective_ask_model());
@@ -1215,7 +1222,12 @@ fn paste_dictation(
                 Some(&rest_fallback),
                 std::time::Duration::from_millis(1500),
             ) {
-                Ok(out) if ai::cleanup::plausible_cleanup(&cleaned, &out) => out,
+                Ok(out)
+                    if ai::cleanup::plausible_cleanup(&cleaned, &out)
+                        && ai::cleanup::keeps_marks(&out, &prepared.snippets) =>
+                {
+                    out
+                }
                 Ok(_) => {
                     eprintln!("[soul][dictation] llm cleanup rejected (not a cleanup)");
                     cleaned
@@ -1229,8 +1241,9 @@ fn paste_dictation(
             cleaned
         }
     } else {
-        heard.text
+        cleaned
     };
+    let text = ai::cleanup::finish_dictation(&written, &prepared.snippets);
     if text.trim().is_empty() {
         return Err("Transcription was empty.".into());
     }

@@ -5,13 +5,15 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, EventTarget};
 
 use crate::soul_debug;
 
 const HISTORY_LIMIT: usize = 20;
 const POLL_MS: u64 = 500;
+/// How long Soul's own paste texts stay ignored by the watcher.
+const INTERNAL_TTL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +28,23 @@ struct ClipboardState {
     items: Vec<ClipboardItem>,
     last_text: String,
     seeded: bool,
+    /// Texts Soul itself put on the clipboard (dictation paste, restored previous text).
+    internal: Vec<(String, Instant)>,
+}
+
+fn normalized(text: &str) -> String {
+    text.replace('\0', "").trim().to_string()
+}
+
+/// Soul is about to paste `temp` and later restore `restored`: neither is a new history item.
+pub fn note_internal_paste(temp: &str, restored: Option<&str>) {
+    let mut st = state().lock();
+    st.internal.retain(|(_, at)| at.elapsed() < INTERNAL_TTL);
+    let now = Instant::now();
+    st.internal.push((normalized(temp), now));
+    if let Some(r) = restored {
+        st.internal.push((normalized(r), now));
+    }
 }
 
 fn state() -> &'static Mutex<ClipboardState> {
@@ -35,6 +54,7 @@ fn state() -> &'static Mutex<ClipboardState> {
             items: Vec::new(),
             last_text: String::new(),
             seeded: false,
+            internal: Vec::new(),
         })
     })
 }
@@ -85,7 +105,7 @@ pub fn start_watcher(app: AppHandle) {
                     }
                 };
 
-                let text = text.replace('\0', "").trim().to_string();
+                let text = normalized(&text);
                 if text.is_empty() {
                     continue;
                 }
@@ -104,6 +124,12 @@ pub fn start_watcher(app: AppHandle) {
                 }
 
                 if text == st.last_text {
+                    continue;
+                }
+
+                st.internal.retain(|(_, at)| at.elapsed() < INTERNAL_TTL);
+                if st.internal.iter().any(|(t, _)| *t == text) {
+                    st.last_text = text;
                     continue;
                 }
 

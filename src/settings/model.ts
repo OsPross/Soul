@@ -29,6 +29,10 @@ export interface SettingsData {
   islandPosition?: "topCenter" | "topLeft" | "topRight";
   islandSections?: IslandSections;
   pinnedApps?: string[];
+  /** Dictation dictionary: exact spellings. */
+  customWords?: string[];
+  replacements?: ReplacementRule[];
+  snippets?: VoiceSnippet[];
   talkMode?: "smart" | "separate";
   talkKey?: string;
   talkKeySwallow?: boolean;
@@ -48,6 +52,16 @@ export interface SettingsData {
   contextEnabled?: boolean;
   /** Forget the conversation context after this many seconds without a command (15–600). */
   contextTimeoutSecs?: number;
+}
+
+export interface ReplacementRule {
+  from: string;
+  to: string;
+}
+
+export interface VoiceSnippet {
+  trigger: string;
+  text: string;
 }
 
 export interface MemoryFact {
@@ -179,6 +193,9 @@ export const INITIAL_FORM: SettingsData = {
   islandPosition: "topCenter",
   islandSections: DEFAULT_SECTIONS,
   pinnedApps: [],
+  customWords: [],
+  replacements: [],
+  snippets: [],
   ...TALK_DEFAULTS,
 };
 
@@ -200,6 +217,9 @@ export function withDefaults(s: SettingsData): SettingsData {
     islandPosition: s.islandPosition ?? "topCenter",
     islandSections: s.islandSections ?? DEFAULT_SECTIONS,
     pinnedApps: s.pinnedApps ?? [],
+    customWords: s.customWords ?? [],
+    replacements: s.replacements ?? [],
+    snippets: s.snippets ?? [],
     talkMode: s.talkMode ?? TALK_DEFAULTS.talkMode,
     talkKey: s.talkKey || TALK_DEFAULTS.talkKey,
     talkKeySwallow: s.talkKeySwallow ?? TALK_DEFAULTS.talkKeySwallow,

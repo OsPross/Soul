@@ -268,33 +268,116 @@ pub mod clipboard {
     use std::thread;
     use std::time::Duration;
 
+    /// Slow apps (Word, Electron) read the clipboard well after Ctrl+V.
+    const RESTORE_AFTER_MS: u64 = 700;
+
+    /// One handle for the whole app (X11: it also keeps serving what Soul put there).
+    static CLIPBOARD: parking_lot::Mutex<Option<Clipboard>> = parking_lot::Mutex::new(None);
+    /// Restore still owed by the last paste: (generation, our text, what to put back).
+    type PendingRestore = (u64, String, Option<String>);
+    static PENDING: parking_lot::Mutex<Option<PendingRestore>> = parking_lot::Mutex::new(None);
+
+    fn with_clipboard<T>(f: impl FnOnce(&mut Clipboard) -> T) -> Result<T, String> {
+        let mut slot = CLIPBOARD.lock();
+        if slot.is_none() {
+            *slot = Some(Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?);
+        }
+        let clipboard = slot.as_mut().ok_or("Clipboard unavailable")?;
+        Ok(f(clipboard))
+    }
+
+    /// Text that never lands in Win+V / cloud clipboard / clipboard-manager history.
+    fn set_text_excluded(clipboard: &mut Clipboard, text: &str) -> Result<(), arboard::Error> {
+        #[cfg(windows)]
+        {
+            use arboard::SetExtWindows;
+            clipboard
+                .set()
+                .exclude_from_history()
+                .exclude_from_cloud()
+                .text(text.to_string())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use arboard::SetExtLinux;
+            clipboard.set().exclude_from_history().text(text.to_string())
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
+        {
+            clipboard.set_text(text)
+        }
+    }
+
+    /// Ctrl+V while the user still holds the talk key / a hotkey modifier becomes Ctrl+Alt+V etc.
+    #[cfg(windows)]
+    fn wait_modifiers_released() {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+            VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+        };
+        let keys = [
+            VK_CONTROL, VK_LCONTROL, VK_RCONTROL, VK_MENU, VK_LMENU, VK_RMENU, VK_SHIFT, VK_LSHIFT,
+            VK_RSHIFT, VK_LWIN, VK_RWIN,
+        ];
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(800) {
+            // SAFETY: plain key state queries.
+            let held = keys
+                .iter()
+                .any(|k| (unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000) != 0);
+            if !held {
+                return;
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn wait_modifiers_released() {}
+
+    /// Paste `text` through the clipboard, then put the user's text back 700 ms later in the
+    /// background, unless they copied something else meanwhile.
     pub fn with_temporary_text<F>(text: &str, paste_action: F) -> Result<(), String>
     where
         F: FnOnce() -> Result<(), String>,
     {
-        let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Clipboard unavailable: {e}"))?;
+        let current = with_clipboard(|c| c.get_text().ok())?;
+        // A restore still pending from the previous paste: the user's text is the one it holds.
+        let previous = match PENDING.lock().take() {
+            Some((_, ours, prev)) if current.as_deref() == Some(ours.as_str()) => prev,
+            _ => current,
+        };
+        crate::island::clipboard::note_internal_paste(text, previous.as_deref());
 
-        let previous = clipboard.get_text().ok();
-
-        clipboard
-            .set_text(text)
+        with_clipboard(|c| set_text_excluded(c, text))?
             .map_err(|e| format!("Failed to set clipboard: {e}"))?;
-
         thread::sleep(Duration::from_millis(40));
-
+        wait_modifiers_released();
         let paste_result = paste_action();
 
-        thread::sleep(Duration::from_millis(80));
-
-        match previous {
-            Some(old) => {
-                let _ = clipboard.set_text(old);
-            }
-            None => {
-                let _ = clipboard.clear();
-            }
-        }
+        static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let ours = text.to_string();
+        *PENDING.lock() = Some((generation, ours.clone(), previous));
+        let _ = thread::Builder::new()
+            .name("soul-clipboard-restore".into())
+            .spawn(move || {
+                thread::sleep(Duration::from_millis(RESTORE_AFTER_MS));
+                let mut pending = PENDING.lock();
+                if !matches!(&*pending, Some((g, _, _)) if *g == generation) {
+                    return; // a newer paste owns the restore
+                }
+                let Some((_, _, previous)) = pending.take() else { return };
+                let _ = with_clipboard(|c| {
+                    if c.get_text().ok().as_deref() != Some(ours.as_str()) {
+                        return; // the user copied something else meanwhile
+                    }
+                    let _ = match previous {
+                        Some(old) => set_text_excluded(c, &old),
+                        None => c.clear(),
+                    };
+                });
+            });
 
         paste_result
     }
