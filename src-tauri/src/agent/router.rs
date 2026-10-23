@@ -177,6 +177,9 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     if let Some(r) = match_scene(words, folded) {
         return Some(r);
     }
+    if let Some(r) = match_spotify(lower, words, folded) {
+        return Some(r);
+    }
     if is_now_playing(lower, folded) {
         return pr("now_playing", json!({}), "now-playing");
     }
@@ -228,6 +231,184 @@ fn route(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
     }
 
     None
+}
+
+fn is_spotify_word(w: &str) -> bool {
+    w.starts_with("spotif") || w.starts_with("spotyf")
+}
+
+/// Words dropped from a Spotify query: possessives, „piosenkę”, kind words.
+const SPOTIFY_LEAD: &[&str] = &[
+    "mi", "sobie", "moja", "moje", "moj", "my", "the", "a", "piosenke", "piosenka", "utwor", "kawalek", "song",
+    "track", "playliste", "playlista", "playlisty", "playlist", "album", "albumu", "artyste", "artysty",
+    "wykonawce", "artist",
+];
+
+/// The user's words after `from`, minus „na Spotify” / „w tle” and leading possessive / kind words.
+fn spotify_query(words: &[&str], folded: &[String], from: usize, until: usize) -> String {
+    let mut keep = Vec::new();
+    let mut i = from;
+    while i < until {
+        let f = folded[i].as_str();
+        let next = folded.get(i + 1).map(String::as_str).unwrap_or("");
+        if is_spotify_word(f) || f == "tle" || f == "background" {
+            i += 1;
+        } else if (matches!(f, "na" | "w" | "ze" | "z" | "on" | "in" | "from") && is_spotify_word(next))
+            || (f == "w" && next == "tle")
+            || (f == "in" && next == "the" && folded.get(i + 2).is_some_and(|w| w == "background"))
+        {
+            i += if f == "in" && next == "the" { 2 } else { 1 };
+        } else {
+            keep.push(i);
+            i += 1;
+        }
+    }
+    let lead = keep.iter().take_while(|&&k| SPOTIFY_LEAD.contains(&folded[k].as_str())).count();
+    clean_tail(&keep[lead..].iter().map(|&k| words[k]).collect::<Vec<_>>().join(" "))
+}
+
+/// Spotify in the background: play / queue / like / its own volume, plus seek, shuffle and repeat
+/// of whatever plays. Runs before the generic media / volume / open-app matches.
+fn match_spotify(lower: &str, words: &[&str], folded: &[String]) -> Option<PreRoute> {
+    let spotify = folded.iter().any(|w| is_spotify_word(w));
+    let has = |set: &[&str]| folded.iter().any(|w| set.contains(&w.as_str()));
+    let first = folded[0].as_str();
+
+    if contains_any(
+        lower,
+        &[
+            "usun z polubionych", "usun z ulubionych", "usun te piosenke z", "unlike this", "unlike the",
+            "nie lubie tej piosenki",
+        ],
+    ) {
+        return pr("spotify", json!({ "action": "unlike" }), "spotify:unlike");
+    }
+    if contains_any(
+        lower,
+        &[
+            "polub te piosenke", "polub ten utwor", "polub ten kawalek", "piosenke do ulubionych",
+            "utwor do ulubionych", "kawalek do ulubionych", "do polubionych", "like this song", "like this track",
+            "like the song", "like the track",
+        ],
+    ) {
+        return pr("spotify", json!({ "action": "like" }), "spotify:like");
+    }
+
+    // Spotify's own volume: „ścisz Spotify na 30%”, „podgłośnij Spotify o 10”, „wycisz Spotify”.
+    if spotify
+        && contains_any(
+            lower,
+            &["scisz", "przycisz", "podglos", "glosnosc", "glosniej", "ciszej", "wycisz", "mute", "volume", "louder", "quieter"],
+        )
+    {
+        let args = if contains_any(lower, &["wycisz", "mute"]) && !contains_any(lower, &["odcisz", "unmute"]) {
+            json!({ "action": "volume", "percent": 0 })
+        } else if let Some(delta) = relative_volume(lower) {
+            json!({ "action": "volume", "delta": delta })
+        } else if let Some(p) = lower
+            .split_whitespace()
+            .find_map(|t| t.trim_end_matches(['%', '.', ',', '!']).parse::<u8>().ok().filter(|p| *p <= 100))
+        {
+            json!({ "action": "volume", "percent": p })
+        } else if contains_any(lower, &["scisz", "przycisz", "ciszej", "quieter", "lower"]) {
+            json!({ "action": "volume", "delta": -15 })
+        } else {
+            json!({ "action": "volume", "delta": 15 })
+        };
+        return pr("spotify", args, "spotify:volume");
+    }
+
+    let off = has(&["wylacz", "off", "disable", "bez"]);
+    if folded.len() <= 6
+        && contains_any(lower, &["losowe odtwarzanie", "odtwarzanie losowe", "losowa kolejnosc", "tryb losowy", "shuffle", "przetasuj", "wymieszaj"])
+    {
+        let state = if off { "off" } else if has(&["wlacz", "on", "enable"]) { "on" } else { "toggle" };
+        return pr("spotify", json!({ "action": "shuffle", "state": state }), "spotify:shuffle");
+    }
+    if folded.len() <= 6
+        && (contains_any(lower, &["powtarzaj", "powtarzanie", "zapetl", "repeat", "loop"]))
+    {
+        let state = if off || contains_any(lower, &["nie powtarzaj", "repeat off"]) {
+            "off"
+        } else if has(&["utwor", "piosenke", "kawalek", "track", "song", "ten", "te", "this", "jeden", "one"]) {
+            "track"
+        } else if has(&["wlacz", "on", "playlisty", "playlist", "album", "albumu", "wszystko", "all"]) {
+            "context"
+        } else {
+            "toggle"
+        };
+        return pr("spotify", json!({ "action": "repeat", "state": state }), "spotify:repeat");
+    }
+
+    // Seek: „przewiń o 30 sekund (do tyłu)”, „cofnij piosenkę o 15 sekund”, „przewiń na 1:30”.
+    if matches!(first, "przewin" | "cofnij" | "skocz" | "seek" | "skip" | "rewind" | "jump" | "fast") {
+        let clock = words.iter().find_map(|w| {
+            let (m, s) = w.trim_end_matches(['.', ',', '!', '?']).split_once(':')?;
+            Some(m.parse::<i64>().ok()? * 60 + s.parse::<i64>().ok().filter(|s| *s < 60)?)
+        });
+        let back = first == "cofnij"
+            || first == "rewind"
+            || contains_any(lower, &["do tylu", "wstecz", "back"]);
+        let relative = back || has(&["o", "by", "forward", "przodu", "naprzod"]) || first == "skip";
+        let args = match (clock, parse_duration(folded)) {
+            (Some(at), _) if !relative => json!({ "action": "seek", "seconds": at }),
+            (_, Some((secs, _))) if relative => {
+                let secs = secs as i64;
+                json!({ "action": "seek", "delta": if back { -secs } else { secs } })
+            }
+            (_, Some((secs, _))) => json!({ "action": "seek", "seconds": secs }),
+            _ => return None,
+        };
+        return pr("spotify", args, "spotify:seek");
+    }
+
+    // Queue: „dodaj X do kolejki”, „kolejkuj X”, "add X to (the) queue".
+    let queue_at = folded.iter().position(|w| matches!(w.as_str(), "kolejki" | "queue"));
+    if matches!(first, "dodaj" | "add" | "kolejkuj" | "queue") && (queue_at.is_some() || first == "kolejkuj") {
+        let mut until = queue_at.unwrap_or(folded.len());
+        while until > 1 && matches!(folded[until - 1].as_str(), "do" | "to" | "the") {
+            until -= 1;
+        }
+        let mut query = spotify_query(words, folded, 1, until);
+        if let (true, Some(at)) = (query.is_empty(), queue_at) {
+            query = spotify_query(words, folded, at + 1, folded.len()); // „dodaj do kolejki X”
+        }
+        if query.is_empty() {
+            return None;
+        }
+        return pr("spotify", json!({ "action": "queue", "query": query }), "spotify:queue");
+    }
+
+    // Play: „puść X na Spotify”, „włącz moją playlistę X”, „odpal Spotify w tle”, "play X on Spotify".
+    if !matches!(first, "pusc" | "wlacz" | "zagraj" | "odtworz" | "graj" | "play" | "odpal" | "uruchom" | "start") {
+        return None;
+    }
+    let kind = if has(&["playliste", "playlista", "playlisty", "playlist"]) {
+        "playlist"
+    } else if has(&["album", "albumu"]) {
+        "album"
+    } else if has(&["artyste", "artysty", "wykonawce", "artist"]) {
+        "artist"
+    } else {
+        "track"
+    };
+    if (!spotify && kind != "playlist") || has_youtube(lower) {
+        return None;
+    }
+    let query = spotify_query(words, folded, 1, folded.len());
+    let generic = query.is_empty()
+        || matches!(
+            normalize(&query).as_str(),
+            "muzyke" | "muzyka" | "muzyki" | "cos" | "music" | "something" | "some music"
+        );
+    if generic {
+        // „odpal Spotify” alone is opening the app; only music / „w tle” starts it in the background.
+        if !contains_any(lower, &["muzyk", "music", "w tle", "background", "cos"]) {
+            return None;
+        }
+        return pr("spotify", json!({ "action": "play" }), "spotify:resume");
+    }
+    pr("spotify", json!({ "action": "play", "query": query, "kind": kind }), "spotify:play")
 }
 
 /// „ścisz o 20” → -20, „podgłośnij o 10 procent” → +10 (needs „o N” / "by N").
@@ -978,6 +1159,62 @@ mod tests {
 
     fn tool(transcript: &str) -> Option<(String, Value)> {
         match_command(transcript).map(|r| (r.tool, r.args))
+    }
+
+    #[test]
+    fn spotify_commands() {
+        let spotify = |t: &str| {
+            let (tool, args) = tool(t).unwrap_or_else(|| panic!("no route: {t}"));
+            assert_eq!(tool, "spotify", "{t}");
+            args
+        };
+        assert_eq!(
+            spotify("puść Daria Zawiałow na Spotify"),
+            json!({ "action": "play", "query": "Daria Zawiałow", "kind": "track" })
+        );
+        assert_eq!(
+            spotify("włącz moją playlistę trening"),
+            json!({ "action": "play", "query": "trening", "kind": "playlist" })
+        );
+        assert_eq!(
+            spotify("puść album Kwiaty na Spotify"),
+            json!({ "action": "play", "query": "Kwiaty", "kind": "album" })
+        );
+        assert_eq!(
+            spotify("play Bohemian Rhapsody on Spotify"),
+            json!({ "action": "play", "query": "Bohemian Rhapsody", "kind": "track" })
+        );
+        assert_eq!(spotify("włącz muzykę na Spotify"), json!({ "action": "play" }));
+        assert_eq!(spotify("odpal Spotify w tle"), json!({ "action": "play" }));
+        assert_eq!(
+            spotify("dodaj Bohemian Rhapsody do kolejki"),
+            json!({ "action": "queue", "query": "Bohemian Rhapsody" })
+        );
+        assert_eq!(spotify("add Yesterday to the queue"), json!({ "action": "queue", "query": "Yesterday" }));
+        assert_eq!(spotify("ścisz Spotify na 30%"), json!({ "action": "volume", "percent": 30 }));
+        assert_eq!(spotify("podgłośnij Spotify o 10"), json!({ "action": "volume", "delta": 10 }));
+        assert_eq!(spotify("wycisz Spotify"), json!({ "action": "volume", "percent": 0 }));
+        assert_eq!(spotify("set Spotify volume to 30%"), json!({ "action": "volume", "percent": 30 }));
+        assert_eq!(spotify("polub tę piosenkę"), json!({ "action": "like" }));
+        assert_eq!(spotify("dodaj utwór do polubionych"), json!({ "action": "like" }));
+        assert_eq!(spotify("przewiń o 30 sekund"), json!({ "action": "seek", "delta": 30 }));
+        assert_eq!(spotify("cofnij piosenkę o 15 sekund"), json!({ "action": "seek", "delta": -15 }));
+        assert_eq!(spotify("przewiń na 1:30"), json!({ "action": "seek", "seconds": 90 }));
+        assert_eq!(spotify("włącz losowe odtwarzanie"), json!({ "action": "shuffle", "state": "on" }));
+        assert_eq!(spotify("shuffle off"), json!({ "action": "shuffle", "state": "off" }));
+        assert_eq!(spotify("powtarzaj ten utwór"), json!({ "action": "repeat", "state": "track" }));
+        assert_eq!(spotify("wyłącz powtarzanie"), json!({ "action": "repeat", "state": "off" }));
+        assert_eq!(spotify("weź mi puść Mori na Spotify"), json!({ "action": "play", "query": "Mori", "kind": "track" }));
+    }
+
+    #[test]
+    fn spotify_does_not_steal_other_commands() {
+        assert!(tool("odpal Spotify").is_none());
+        assert!(tool("włącz Spotify").is_none());
+        assert_eq!(tool("cofnij").unwrap().1["action"], "prev");
+        assert_eq!(tool("skip").unwrap().1["action"], "next");
+        assert_eq!(tool("ścisz o 20").unwrap().0, "set_volume");
+        assert_eq!(tool("puść playlistę lofi na YouTube").unwrap().0, "youtube_play");
     }
 
     #[test]

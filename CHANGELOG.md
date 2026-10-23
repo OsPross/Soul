@@ -8,6 +8,15 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Spotify w tle.** Spotify is controlled without its window ever coming to the front. The Island
+  prefers the Spotify session even when it is paused behind a browser tab: seek (click the progress
+  bar), shuffle, repeat and Spotify's own mixer volume. By voice: „przewiń o 30 sekund”, „włącz losowe
+  odtwarzanie”, „powtarzaj ten utwór”, „ścisz Spotify na 30%”, „odpal Spotify w tle”. Optionally connect
+  your Spotify account (Settings → Wyspa → Spotify; OAuth PKCE with your own Client ID, the login stays
+  in `spotify-auth.json` in the app data folder) to play any song, album, artist or playlist („puść X
+  na Spotify”, „włącz moją playlistę X”), queue („dodaj X do kolejki”) and like („polub tę piosenkę”)
+  tracks, and to search / pick playlists and the playback device on the Island. Starting playback over
+  the API needs Premium. Media keys no longer spawn PowerShell.
 - **Notatki ze spotkań (Call Notetaker).** „Nagraj spotkanie” (voice, Island → Spotkania or
   Settings → Spotkania) records your mic and the computer's audio, shows a live transcript and a
   pulsing `● REC` on the Island. After „Zatrzymaj nagrywanie spotkania” the call is transcribed

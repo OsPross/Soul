@@ -1036,7 +1036,7 @@ pub fn agent_voice_system_prompt(settings: &crate::config::Settings) -> String {
 }
 
 /// How to use Soul's own tools (memory, scenes, timers, voice volume) — shared by Live + REST.
-const TOOL_GUIDE: &str = "Use remember when the user asks you to remember something or states a durable personal fact (e.g. \"gram na serwerze X\", \"moja playlista to Y\"); forget to delete facts; recall when asked what you remember. Use set_timer for timers and reminders (\"nastaw 10 minut na makaron\"). Use run_scene to run a saved scene by name and create_scene to define one. Use set_voice_volume for \"mów ciszej/głośniej\" (Soul's own voice, not the system volume). Use now_playing for \"co gra?\" and add_note for quick notes.";
+const TOOL_GUIDE: &str = "Use remember when the user asks you to remember something or states a durable personal fact (e.g. \"gram na serwerze X\", \"moja playlista to Y\"); forget to delete facts; recall when asked what you remember. Use set_timer for timers and reminders (\"nastaw 10 minut na makaron\"). Use run_scene to run a saved scene by name and create_scene to define one. Use set_voice_volume for \"mów ciszej/głośniej\" (Soul's own voice, not the system volume). Use now_playing for \"co gra?\" and add_note for quick notes. For any Spotify request (playing a song/artist/playlist/album, queueing, liking, Spotify's own volume, shuffle, repeat, seeking, or starting music on Spotify) ALWAYS use the spotify tool — NEVER call open_app('Spotify') unless the user explicitly asks to show the Spotify window on screen.";
 
 /// Build the agent request from an already-transcribed command (text + tools).
 #[cfg(test)]
@@ -1183,6 +1183,26 @@ pub fn agent_tool_declarations() -> Value {
                         "type": "string",
                         "description": "play, pause, next, or prev"
                     }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "spotify",
+            "description": "Control Spotify in the background without showing its window: play a song/artist/album/playlist by name (\"puść X na Spotify\", \"włącz moją playlistę X\"), pause/resume/next/prev, seek, shuffle, repeat, Spotify's own volume, queue, like/unlike the current track, move playback to another device. Also seek/shuffle/repeat of whatever is playing.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["play", "pause", "resume", "next", "prev", "seek", "shuffle", "repeat", "volume", "queue", "like", "unlike", "transfer"]
+                    },
+                    "query": { "type": "string", "description": "Song / artist / album / playlist name (play, queue) or device name (transfer); omit to resume" },
+                    "kind": { "type": "string", "enum": ["track", "playlist", "album", "artist"] },
+                    "percent": { "type": "integer", "description": "volume: Spotify's own volume 0–100" },
+                    "delta": { "type": "integer", "description": "volume: relative percent (-100–100); seek: relative seconds (negative = back)" },
+                    "seconds": { "type": "integer", "description": "seek: absolute position in seconds" },
+                    "state": { "type": "string", "description": "shuffle: on | off | toggle; repeat: off | track | context | toggle" }
                 },
                 "required": ["action"]
             }

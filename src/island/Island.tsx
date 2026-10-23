@@ -993,6 +993,7 @@ const TOOL_LABELS: Record<string, [string, string]> = {
   youtube_play: ["YouTube ▶", "YouTube ▶"],
   set_volume: ["Głośność", "Volume"],
   media_control: ["Media", "Media"],
+  spotify: ["Spotify", "Spotify"],
   type_text: ["Piszę", "Typing"],
   set_voice_volume: ["Głos", "Voice"],
   remember: ["Pamięć", "Memory"],

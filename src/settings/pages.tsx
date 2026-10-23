@@ -27,6 +27,7 @@ import {
 } from "./model";
 import type { SettingsCtx } from "./Settings";
 import { Button, Callout, Card, Keycap, Row, Segmented, Select, Slider, Toggle } from "./ui";
+import { SpotifyCard } from "./SpotifyCard";
 import { WakeWordCard } from "./WakeWord";
 
 type P = { s: SettingsCtx };
@@ -882,6 +883,7 @@ export function IslandPage({ s }: P) {
           {form.islandSections?.claudePlan && <ClaudeRelay />}
         </div>
       </Card>
+      <SpotifyCard />
       <Callout>
         {tr(
           lang,

@@ -1759,6 +1759,7 @@ fn run_tool(
             let action = arg_str(args, "action")?;
             platform.media_control(&action)
         }
+        "spotify" => crate::spotify::run(args),
         "type_text" => {
             let text = arg_str(args, "text")?;
             computer::vio::paste_text(platform.as_ref(), &text)?;

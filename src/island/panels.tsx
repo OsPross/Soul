@@ -4,6 +4,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useAnim, useAppearance, useT } from "../anim/AnimationProvider";
 import { NextIcon, PauseIcon, PlayIcon, PrevIcon, Press, ProgressBar } from "./bits";
 import type { ProgressAnchor } from "./progress";
+import { tr, type UiLang } from "../i18n";
+import { spotifyRun, useSpotifyStatus, type SpotifyDevice, type SpotifyPlaylist } from "../lib/spotify";
 
 export interface NowPlaying {
   title: string;
@@ -16,6 +18,12 @@ export interface NowPlaying {
   durationMs: number;
   positionUpdatedAtMs?: number;
   playbackRate?: number;
+  sourceApp?: string;
+  shuffle?: boolean;
+  repeat?: "off" | "track" | "context";
+  appVolume?: number | null;
+  spotifyRunning?: boolean;
+  spotifyInstalled?: boolean;
 }
 
 export interface ClipboardItem {
@@ -110,42 +118,204 @@ export function NowPlayingPanel({
   accent: string;
 }) {
   const t = useT();
+  const lang = useAnim().cfg.uiLang;
   const [elapsed, setElapsed] = useState(np.positionMs || 0);
+  const [spotify] = useSpotifyStatus();
+  const connected = !!spotify?.connected;
+  const extras = <SpotifyExtras np={np} connected={connected} lang={lang} />;
   if (!np.available) {
-    return <p className="pt-10 text-center text-xs text-[var(--soul-muted)]">{t("island.nothingPlaying")}</p>;
+    return (
+      <div>
+        <p className="pt-10 text-center text-xs text-[var(--soul-muted)]">{t("island.nothingPlaying")}</p>
+        {extras}
+      </div>
+    );
   }
+  const toggle = (on: boolean) =>
+    `inline-flex h-7 w-7 items-center justify-center rounded-full text-[13px] ${on ? "" : "opacity-45 hover:opacity-80"}`;
   return (
-    <div className="flex gap-4 pt-1">
-      <div
-        className="shrink-0 rounded-2xl"
-        style={{ boxShadow: `0 8px 22px -10px ${accent}`, transition: "box-shadow 0.6s" }}
-      >
-        <Artwork src={np.artworkDataUrl} size={112} radius={16} />
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="truncate text-[15px] font-semibold tracking-tight">{np.title || "—"}</div>
-        <div className="mt-0.5 truncate text-[12px] text-[var(--soul-muted)]">
-          {np.artist || t("island.unknownArtist")}
+    <div>
+      <div className="flex gap-4 pt-1">
+        <div
+          className="shrink-0 rounded-2xl"
+          style={{ boxShadow: `0 8px 22px -10px ${accent}`, transition: "box-shadow 0.6s" }}
+        >
+          <Artwork src={np.artworkDataUrl} size={112} radius={16} />
         </div>
-        {np.album && <div className="mt-0.5 truncate text-[11px] text-white/35">{np.album}</div>}
-        <div className="mt-auto">
-          <ProgressBar
-            anchor={anchor}
-            durationMs={np.durationMs}
-            fallbackMs={np.positionMs || 0}
-            playing={np.playing}
-            color={accent}
-            onTime={setElapsed}
-          />
-          <div className="mt-1 flex justify-between text-[10px] tabular-nums text-white/40">
-            <span>{formatTime(elapsed)}</span>
-            <span>{np.durationMs > 0 ? formatTime(np.durationMs) : "--:--"}</span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="truncate text-[15px] font-semibold tracking-tight">{np.title || "—"}</div>
+          <div className="mt-0.5 truncate text-[12px] text-[var(--soul-muted)]">
+            {np.artist || t("island.unknownArtist")}
           </div>
-          <div className="mt-1.5 flex justify-center">
-            <Transport playing={np.playing} onMedia={onMedia} />
+          {np.album && <div className="mt-0.5 truncate text-[11px] text-white/35">{np.album}</div>}
+          <div className="mt-auto">
+            <ProgressBar
+              anchor={anchor}
+              durationMs={np.durationMs}
+              fallbackMs={np.positionMs || 0}
+              playing={np.playing}
+              color={accent}
+              onTime={setElapsed}
+              onSeek={(ms) => onMedia(`seek:${Math.round(ms)}`)}
+              label={tr(lang, "Pozycja utworu", "Track position")}
+            />
+            <div className="mt-1 flex justify-between text-[10px] tabular-nums text-white/40">
+              <span>{formatTime(elapsed)}</span>
+              <span>{np.durationMs > 0 ? formatTime(np.durationMs) : "--:--"}</span>
+            </div>
+            <div className="mt-1.5 flex items-center justify-center gap-1">
+              <Press
+                label={tr(lang, "Losowo", "Shuffle")}
+                onClick={() => onMedia("shuffle:toggle")}
+                className={toggle(!!np.shuffle)}
+                style={np.shuffle ? { color: accent } : undefined}
+              >
+                🔀
+              </Press>
+              <Transport playing={np.playing} onMedia={onMedia} />
+              <Press
+                label={tr(lang, "Powtarzanie", "Repeat")}
+                onClick={() => onMedia("repeat:toggle")}
+                className={toggle(!!np.repeat && np.repeat !== "off")}
+                style={np.repeat && np.repeat !== "off" ? { color: accent } : undefined}
+              >
+                {np.repeat === "track" ? "🔂" : "🔁"}
+              </Press>
+              {connected && np.sourceApp === "spotify" && (
+                <Press
+                  label={tr(lang, "Polub utwór", "Like track")}
+                  onClick={() => void spotifyRun({ action: "like" }).catch(() => undefined)}
+                  className={toggle(false)}
+                >
+                  ♥
+                </Press>
+              )}
+            </div>
           </div>
         </div>
       </div>
+      {extras}
+    </div>
+  );
+}
+
+/** Spotify's own volume (any time it has an audio session) and, with a connected account, search /
+ * queue, top playlists and the playback device. */
+function SpotifyExtras({ np, connected, lang }: { np: NowPlaying; connected: boolean; lang: UiLang }) {
+  const [query, setQuery] = useState("");
+  const [note, setNote] = useState<string | null>(null);
+  const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
+  const [devices, setDevices] = useState<SpotifyDevice[]>([]);
+  const [volume, setVolume] = useState<number | null>(null);
+  const dragging = useRef(false);
+
+  useEffect(() => {
+    if (!dragging.current) setVolume(np.appVolume ?? null);
+  }, [np.appVolume]);
+  useEffect(() => {
+    if (!connected) return;
+    invoke<SpotifyPlaylist[]>("spotify_playlists").then((p) => setPlaylists(p.slice(0, 5))).catch(() => undefined);
+    invoke<SpotifyDevice[]>("spotify_devices").then(setDevices).catch(() => undefined);
+  }, [connected]);
+
+  if (!connected && volume == null) return null;
+  const go = (args: Record<string, unknown>) =>
+    spotifyRun(args)
+      .then(setNote)
+      .catch((e) => setNote(String(e)));
+  const focus = (focused: boolean) => invoke("island_focus_window", { focused }).catch(() => undefined);
+  const commitVolume = () => {
+    dragging.current = false;
+    if (volume != null) invoke("island_media_action", { action: `spotify_volume:${volume}` }).catch(() => undefined);
+  };
+  const active = devices.find((d) => d.isActive)?.id ?? "";
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="flex items-center gap-1.5">
+        {connected && (
+          <>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => focus(true)}
+              onBlur={() => focus(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && query.trim()) {
+                  e.preventDefault();
+                  void go({ action: "play", query: query.trim() });
+                }
+              }}
+              placeholder={tr(lang, "Szukaj utworu lub playlisty w Spotify…", "Search Spotify for a song or playlist…")}
+              className="soul-input min-w-0 flex-1 px-3 py-1 text-[12px]"
+            />
+            <Press
+              label={tr(lang, "Dodaj do kolejki", "Add to queue")}
+              onClick={() => query.trim() && void go({ action: "queue", query: query.trim() })}
+              className="soul-btn-ghost inline-flex h-7 w-7 items-center justify-center rounded-full text-[14px]"
+            >
+              +
+            </Press>
+          </>
+        )}
+        {volume != null && (
+          <label className={`flex items-center gap-1 text-[11px] text-white/50 ${connected ? "w-28" : "w-full"}`}>
+            <span aria-hidden>🔊</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={volume}
+              aria-label={tr(lang, "Głośność Spotify", "Spotify volume")}
+              onChange={(e) => {
+                dragging.current = true;
+                setVolume(Number(e.target.value));
+              }}
+              onPointerUp={commitVolume}
+              onKeyUp={commitVolume}
+              className="min-w-0 flex-1 accent-[var(--accent)]"
+            />
+            <span className="w-7 text-right tabular-nums">{volume}%</span>
+          </label>
+        )}
+      </div>
+      {connected && (playlists.length > 0 || devices.length > 1) && (
+        <div className="flex items-center gap-1 overflow-hidden">
+          {playlists.map((p) => (
+            <Press
+              key={p.uri}
+              label={p.name}
+              onClick={() => void go({ action: "play", query: p.uri })}
+              className="soul-row shrink-0 truncate rounded-full px-2.5 py-0.5 text-[11px] text-white/75"
+              style={{ maxWidth: 120 }}
+            >
+              {p.name}
+            </Press>
+          ))}
+          {devices.length > 1 && (
+            <select
+              value={active}
+              aria-label={tr(lang, "Urządzenie Spotify", "Spotify device")}
+              onFocus={() => focus(true)}
+              onBlur={() => focus(false)}
+              onChange={(e) => {
+                const id = e.target.value;
+                setDevices((ds) => ds.map((d) => ({ ...d, isActive: d.id === id })));
+                void go({ action: "transfer", query: id });
+              }}
+              className="soul-input ml-auto shrink-0 px-2 py-0.5 text-[11px]"
+            >
+              {!active && <option value="">—</option>}
+              {devices.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
+      {note && <p className="truncate text-[10.5px] text-white/45">{note}</p>}
     </div>
   );
 }

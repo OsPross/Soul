@@ -134,6 +134,23 @@ The Island is a frameless always-on-top pill at the top of the **primary** monit
 
 **Wayland:** Island falls back to a normal top-anchored always-on-top window. Expect limited transparency/blur, no true click-through outside the pill, and compositor-dependent always-on-top behavior.
 
+### Spotify in the background
+
+Spotify is controlled without its window ever coming to the front.
+
+- **No setup:** the Island prefers the Spotify session even when it is paused behind a YouTube tab —
+  play/pause, next/prev, click the progress bar to seek, 🔀 shuffle, 🔁 repeat and a slider for
+  Spotify's own mixer volume. By voice: „przewiń o 30 sekund”, „cofnij piosenkę o 15 sekund”,
+  „przewiń na 1:30”, „włącz losowe odtwarzanie”, „powtarzaj ten utwór”, „ścisz Spotify na 30%”,
+  „podgłośnij Spotify o 10”, „wycisz Spotify”, „odpal Spotify w tle” (starts it minimized).
+- **Play anything (optional account):** Settings → Wyspa → *Spotify*: create an app at
+  [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) with Redirect URI
+  `http://127.0.0.1:43821/callback`, paste its Client ID, click **Połącz ze Spotify** (OAuth PKCE, no
+  secret). Then „puść Daria Zawiałow na Spotify”, „włącz moją playlistę Trening”, „puść album X na
+  Spotify”, „dodaj Bohemian Rhapsody do kolejki”, „polub tę piosenkę”, plus search / queue / playlists /
+  device on the Island. Starting playback over the API needs **Spotify Premium**; without an account or
+  Premium, Soul opens the search in Spotify and keeps the window in the background.
+
 ### Memory & scenes
 
 - **Settings → Pamięć:** list / search / edit / delete / clear all remembered facts and notes, toggle *Zapamiętuj automatycznie* (facts stated in commands, e.g. „gram na serwerze X”, are saved with a „Zapamiętałem: …” chip and **Cofnij**). Stored in `soul-memory.db` in the app data dir; passwords and keys are refused.
@@ -224,8 +241,8 @@ the new release, a download progress bar and **Uruchom ponownie** (restart to in
 
 ### Your data
 
-Settings (`soul-settings.json`, incl. the API key), memory (`soul-memory.db`) and the trained wake word
-(`wakeword/`) live in the app data dir, never next to the program, so they survive updates and reinstalls:
+Settings (`soul-settings.json`, incl. the API key), memory (`soul-memory.db`), the trained wake word
+(`wakeword/`) and the Spotify login (`spotify-auth.json`) live in the app data dir, never next to the program, so they survive updates and reinstalls:
 
 - Windows: `%APPDATA%\com.oskar.soul\`
 - Linux: `~/.local/share/com.oskar.soul/`

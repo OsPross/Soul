@@ -63,6 +63,10 @@ pub fn is_computer_task(text: &str) -> bool {
     if crate::agent::browser::route(text).is_some() {
         return false;
     }
+    // „przewiń o 30 sekund”, „dodaj X do kolejki”: Spotify / media, not the UI.
+    if crate::agent::router::match_command(text).is_some_and(|r| r.tool == "spotify") {
+        return false;
+    }
     let words = words_after_fillers(text);
     let Some(first) = words.first() else {
         return false;

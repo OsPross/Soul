@@ -119,6 +119,8 @@ export function ProgressBar({
   playing,
   color,
   onTime,
+  onSeek,
+  label,
 }: {
   anchor: ProgressAnchor | null;
   durationMs: number;
@@ -126,6 +128,9 @@ export function ProgressBar({
   playing: boolean;
   color: string;
   onTime?: (ms: number) => void;
+  /** Click / arrow keys jump to that position (ms). */
+  onSeek?: (ms: number) => void;
+  label?: string;
 }) {
   const fill = useRef<HTMLSpanElement>(null);
   const last = useRef({ epoch: 0, ms: 0 });
@@ -150,9 +155,36 @@ export function ProgressBar({
     return () => cancelAnimationFrame(raf);
   }, [anchor, durationMs, fallbackMs, playing]);
 
+  if (!onSeek || durationMs <= 0) {
+    return (
+      <div className="island-progress" aria-hidden>
+        <span ref={fill} style={{ background: color }} />
+      </div>
+    );
+  }
+  const now = () => (anchor ? monotonic(last.current, anchor, Date.now()) : fallbackMs);
   return (
-    <div className="island-progress" aria-hidden>
-      <span ref={fill} style={{ background: color }} />
+    <div
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={Math.round(durationMs / 1000)}
+      aria-valuenow={Math.round(now() / 1000)}
+      className="-my-1.5 cursor-pointer py-1.5"
+      onClick={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        onSeek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * durationMs);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        onSeek(Math.max(0, Math.min(durationMs, now() + (e.key === "ArrowRight" ? 5000 : -5000))));
+      }}
+    >
+      <div className="island-progress">
+        <span ref={fill} style={{ background: color }} />
+      </div>
     </div>
   );
 }
