@@ -40,6 +40,9 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Fixed
 
+- **Island (Windows):** clicking the Island no longer takes focus from your app, clicks next to it
+  go through to the window below, and expanding / collapsing no longer resizes the native window
+  (no more stutter or clipped panel). A click outside closes it; it fixes itself after a DPI change.
 - Voice fixes found by the new end-to-end voice test suite:
   - „A teraz to samo na YouTube” repeats the previous search on YouTube (it searched for „samo”).
   - „Wyszukaj na YouTube … i włącz drugi wynik” no longer tries to open an app called „drugi wynik”.

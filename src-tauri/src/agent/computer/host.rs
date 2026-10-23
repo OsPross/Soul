@@ -174,9 +174,11 @@ impl Host for AppHost {
         let size = win.outer_size().ok()?;
         let island = Rect::new(pos.x, pos.y, size.width as i32, size.height as i32);
         island.intersect(&at)?;
+        crate::island::hold_click_through(true);
         let _ = win.set_ignore_cursor_events(true);
         Some(Box::new(move || {
             let _ = win.set_ignore_cursor_events(false);
+            crate::island::hold_click_through(false);
         }))
     }
 

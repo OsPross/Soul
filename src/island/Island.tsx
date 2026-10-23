@@ -29,6 +29,8 @@ import { holdsCard, mustCollapseFor, pickStage, type Stage } from "./stage";
 /** Transparent window margin around the panel; must match PAD_X / PAD_B in island/mod.rs. */
 const PAD_X = 20;
 const PAD_B = 28;
+/** Windows keeps the native window at a fixed canvas (island/mod.rs `PANEL_W x PANEL_H`). */
+const FIXED_CANVAS = navigator.userAgent.includes("Windows");
 
 type AState =
   | "idle"
@@ -520,9 +522,10 @@ export default function Island() {
   const collapsedRef = useRef<{ w: number; h: number }>(collapsedSize);
   collapsedRef.current = collapsedSize;
 
-  // Native window follows: grow now (room for the spring), shrink after it settles.
+  // Native window (or, on the fixed Windows canvas, the hit rect) follows: grow now (room
+  // for the spring), shrink after it settles.
   const sent = useRef({ w: 0, h: 0 });
-  const shrinkDelay = anim.on("morph") && anim.level !== "off" ? Math.round(anim.dur(420) * 1000) : 30;
+  const shrinkDelay = FIXED_CANVAS ? 0 : anim.on("morph") && anim.level !== "off" ? Math.round(anim.dur(420) * 1000) : 30;
   useEffect(() => {
     const send = () => {
       sent.current = { w: panel.w, h: panel.h };
@@ -535,6 +538,26 @@ export default function Island() {
     const id = window.setTimeout(send, shrinkDelay);
     return () => window.clearTimeout(id);
   }, [mode, panel.w, panel.h, shrinkDelay]);
+
+  // Leaving expanded (or the Apps search) must never leave the Island taking focus.
+  useEffect(() => {
+    if (mode !== "expanded") invoke("island_focus_window", { focused: false }).catch(() => undefined);
+  }, [mode]);
+
+  // WebView2 can disagree with the window's DPI after a monitor / scale change.
+  useEffect(() => {
+    const fit = () => invoke("island_fit_zoom", { dpr: window.devicePixelRatio || 1 }).catch(() => undefined);
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, []);
+
+  // Exact hit rect once the morph settled (the cursor poll hit-tests it on Windows).
+  const glassRef = useRef<HTMLDivElement>(null);
+  const reportRect = useCallback(() => {
+    const r = glassRef.current?.getBoundingClientRect();
+    if (r) invoke("island_set_rect", { x: r.left, y: r.top, width: r.width, height: r.height }).catch(() => undefined);
+  }, []);
 
   // Esc on a pending confirmation / agent question = Cancel (safe default).
   useEffect(() => {
@@ -593,7 +616,9 @@ export default function Island() {
       }}
     >
       <motion.div
+        ref={glassRef}
         {...handlers}
+        onAnimationComplete={reportRect}
         initial={false}
         animate={{ width: panel.w, height: panel.h, borderRadius: mode === "collapsed" ? collapsedSize.r : panel.r }}
         transition={anim.spring("morph")}

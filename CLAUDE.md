@@ -237,7 +237,11 @@ shortcut handler ignores *Pressed* while Right Alt (`VK_RMENU`) is down (never R
 ## Island behaviour
 
 State machine lives in the frontend only: `island/useIslandMode.ts` (collapsed | peek | expanded). Rust (`island/mod.rs`)
-resizes on `island_set_mode` and runs a 100 ms cursor poll as safety net (`island://force-collapse`, then native hard collapse).
+on Windows keeps a fixed non-activating `PANEL_W × PANEL_H` canvas (`WS_EX_NOACTIVATE`, kept via tao's
+`set_focusable` — tao rewrites the ex style on every click-through toggle; `island_focus_window` for text inputs) and
+a 16 ms `spawn_cursor_poll` (`PollGate`, parked while disabled) hit-tests `IslandRect` (`island_set_mode` / `island_set_rect`)
+for click-through, outside click / leave → `island://force-collapse`, then native hard collapse; `island_fit_zoom` fixes
+WebView2 DPI. Elsewhere Rust resizes on `island_set_mode` with a 100 ms leave poll.
 Window = panel + transparent margin (`PAD_X`/`PAD_B`, mirrored in `Island.tsx`); never draw chrome on the window itself.
 Playback progress: `island/progress.ts` (anchor + local interpolation; resync only on track/play-pause change or >2 s drift).
 

@@ -316,8 +316,15 @@ export function AppsPanel({ pinned, setPinned }: { pinned: string[]; setPinned: 
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onFocus={() => suggestions.length > 0 && setOpen(true)}
-            onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+            onFocus={() => {
+              // The Island window is non-activating; typing needs it to take the keyboard.
+              invoke("island_focus_window", { focused: true }).catch(() => undefined);
+              if (suggestions.length > 0) setOpen(true);
+            }}
+            onBlur={() => {
+              invoke("island_focus_window", { focused: false }).catch(() => undefined);
+              window.setTimeout(() => setOpen(false), 120);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();

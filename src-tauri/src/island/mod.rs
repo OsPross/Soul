@@ -1,13 +1,15 @@
 //! Dynamic Island — top-anchored always-on-top assistant bar.
 //!
 //! Frontend owns the expand state machine (`collapsed` | `peek` | `expanded`).
-//! Rust only resizes the native window when the frontend reports a mode/size change
-//! (debounced). While not collapsed, Rust also polls the cursor every 100 ms as a
-//! safety net: if it stays outside the panel it asks the UI to collapse, and if the
-//! UI still has not collapsed shortly after, Rust collapses the window itself.
 //!
-//! The native window is the panel plus a transparent margin (`PAD_X` left/right,
-//! `PAD_B` bottom) so the CSS shadow is never clipped into a rectangle.
+//! Windows: the native window is a fixed, non-activating `PANEL_W x PANEL_H` canvas (never
+//! resized mid-animation). A 16 ms cursor poll (`spawn_cursor_poll`) hit-tests the panel rect
+//! the UI reports (`IslandRect`), toggles click-through, and collapses the Island on a click
+//! outside or after the cursor left it (no DOM blur: the window never takes focus).
+//!
+//! Other platforms: the native window is the panel plus a transparent margin (`PAD_X`
+//! left/right, `PAD_B` bottom), resized (debounced) when the frontend reports a mode/size
+//! change, with a 100 ms leave poll as the collapse safety net.
 
 pub(crate) mod clipboard;
 pub mod debug_log;
@@ -19,10 +21,11 @@ use crate::AppState;
 use media::NowPlaying;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Size};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Size};
 use watchdog::{time_fn, Watch};
 
 pub use clipboard::ClipboardItem;
@@ -35,14 +38,24 @@ pub const PEEK_H: f64 = 96.0;
 pub const EXPANDED_W: f64 = 640.0;
 pub const EXPANDED_H: f64 = 340.0;
 const TOP_MARGIN: i32 = 10;
+#[cfg(not(windows))]
 const RESIZE_DEBOUNCE_MS: u64 = 40;
+#[cfg(not(windows))]
 const LEAVE_POLL_MS: u64 = 100;
+#[cfg(windows)]
+const CURSOR_POLL_MS: u64 = 16;
 const LEAVE_GRACE_MS: u64 = 400;
 /// If the UI has not collapsed this long after the first `force-collapse`, Rust does it.
 const HARD_COLLAPSE_MS: u64 = 800;
 /// Transparent window margin around the panel (logical px). Keep in sync with Island.tsx.
 pub const PAD_X: f64 = 20.0;
 pub const PAD_B: f64 = 28.0;
+/// Fixed native canvas on Windows (logical px): the largest panel plus its margin.
+pub const PANEL_W: f64 = EXPANDED_W + 2.0 * PAD_X;
+pub const PANEL_H: f64 = EXPANDED_H + PAD_B;
+/// Slack around the panel so a moving cursor un-ignores the window before the click lands.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+const HIT_MARGIN: f64 = 14.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -176,8 +189,110 @@ pub struct PlanItem {
     pub done: bool,
 }
 
+/// Visible panel inside the window, window-logical px (`0..PANEL_W`, `0..PANEL_H` on Windows).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct IslandRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl IslandRect {
+    /// Panel placement inside the fixed canvas (mirrors the flex alignment in Island.tsx).
+    pub fn for_panel(width: f64, height: f64, position: &IslandPosition) -> Self {
+        let x = match position {
+            IslandPosition::TopLeft => PAD_X,
+            IslandPosition::TopRight => (PANEL_W - PAD_X - width).max(0.0),
+            IslandPosition::TopCenter => ((PANEL_W - width) / 2.0).max(0.0),
+        };
+        Self { x, y: 0.0, w: width, h: height }
+    }
+
+    #[cfg_attr(not(any(windows, test)), allow(dead_code))]
+    fn hit(&self, x: f64, y: f64) -> bool {
+        self.w > 0.0
+            && x >= self.x - HIT_MARGIN
+            && x <= self.x + self.w + HIT_MARGIN
+            && y >= self.y - HIT_MARGIN
+            && y <= self.y + self.h + HIT_MARGIN
+    }
+}
+
+const IGNORE_UNKNOWN: u8 = 2;
+
+/// Wakes the cursor poll only while the Island is enabled, and holds the hit rect.
+pub struct PollGate {
+    active: std::sync::Mutex<bool>,
+    cv: std::sync::Condvar,
+    pub rect: Mutex<IslandRect>,
+    /// Click-through last applied: 0 = clickable, 1 = ignoring, 2 = unknown (re-apply).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    ignoring: AtomicU8,
+    /// The agent pointer guard owns click-through right now.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    held: AtomicBool,
+}
+
+impl PollGate {
+    fn set_active(&self, on: bool) {
+        *self.active.lock().unwrap_or_else(|e| e.into_inner()) = on;
+        self.cv.notify_all();
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn wait_until_active(&self) {
+        let mut on = self.active.lock().unwrap_or_else(|e| e.into_inner());
+        while !*on {
+            on = self.cv.wait(on).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    pub fn set_rect(&self, rect: IslandRect) {
+        *self.rect.lock() = rect;
+    }
+
+    /// The next poll tick re-applies click-through, whatever it was.
+    pub fn forget_ignore_state(&self) {
+        self.ignoring.store(IGNORE_UNKNOWN, Ordering::Relaxed);
+    }
+}
+
+fn gate() -> &'static PollGate {
+    static GATE: OnceLock<PollGate> = OnceLock::new();
+    GATE.get_or_init(|| PollGate {
+        active: std::sync::Mutex::new(false),
+        cv: std::sync::Condvar::new(),
+        rect: Mutex::new(IslandRect::for_panel(COLLAPSED_W, COLLAPSED_H, &IslandPosition::TopCenter)),
+        ignoring: AtomicU8::new(IGNORE_UNKNOWN),
+        held: AtomicBool::new(false),
+    })
+}
+
+/// Agent clicks over the Island: it stays click-through until released.
+pub fn hold_click_through(on: bool) {
+    let g = gate();
+    g.held.store(on, Ordering::Relaxed);
+    if !on {
+        g.forget_ignore_state();
+    }
+}
+
+/// WebView2 zoom that makes CSS px match the window's DPI (None = already right).
+pub fn calculate_zoom_correction(current_zoom: f64, scale: f64, dpr: f64) -> Option<f64> {
+    if dpr <= 0.0 || !dpr.is_finite() || scale <= 0.0 || !scale.is_finite() {
+        return None;
+    }
+    if (dpr - scale).abs() / scale < 0.02 {
+        return None;
+    }
+    Some((current_zoom * (scale / dpr)).clamp(0.25, 4.0))
+}
+
 struct IslandRuntime {
     mode: IslandMode,
+    /// WebView zoom last set by `island_fit_zoom`.
+    zoom: f64,
     assistant: Option<AssistantBanner>,
     activity: Option<Activity>,
     last_w: f64,
@@ -194,6 +309,7 @@ fn runtime() -> &'static Mutex<IslandRuntime> {
     RT.get_or_init(|| {
         Mutex::new(IslandRuntime {
             mode: IslandMode::Collapsed,
+            zoom: 1.0,
             assistant: None,
             activity: None,
             last_w: 0.0,
@@ -209,8 +325,13 @@ fn runtime() -> &'static Mutex<IslandRuntime> {
 pub fn init(app: &AppHandle) {
     clipboard::start_watcher(app.clone());
     media::start_worker(app.clone());
-    start_leave_watcher(app.clone());
-    start_resize_flusher(app.clone());
+    #[cfg(windows)]
+    spawn_cursor_poll(app.clone(), gate());
+    #[cfg(not(windows))]
+    {
+        start_leave_watcher(app.clone());
+        start_resize_flusher(app.clone());
+    }
 
     let settings = load_settings(app).unwrap_or_default();
     apply_enabled(app, settings.island_enabled);
@@ -224,12 +345,15 @@ pub fn apply_enabled(app: &AppHandle, enabled: bool) {
             let (w, h) = mode.default_size();
             let _ = apply_geometry(app, &settings.island_position, w, h, true);
             prepare_transparent_window(&win);
+            gate().set_rect(IslandRect::for_panel(w, h, &settings.island_position));
             let _ = win.set_ignore_cursor_events(false);
+            gate().forget_ignore_state();
             let _ = win.show();
         } else {
             let _ = win.hide();
         }
     }
+    gate().set_active(enabled);
 }
 
 /// Disable native rounded corners / chrome so only the CSS panel draws the shape.
@@ -269,11 +393,50 @@ fn prepare_transparent_window(win: &tauri::WebviewWindow) {
                 );
             }
         }
+        set_activating(win, false);
     }
     #[cfg(not(windows))]
     {
         let _ = win;
     }
+}
+
+/// Clicks on the Island never steal focus from the user's app, unless a text field asked for it.
+#[cfg(windows)]
+fn set_activating(win: &tauri::WebviewWindow, activating: bool) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    };
+    // tao rewrites GWL_EXSTYLE from its own flags on every click-through toggle: its FOCUSABLE
+    // flag keeps WS_EX_NOACTIVATE there, the raw bits cover the window right now.
+    let _ = win.set_focusable(activating);
+    if let Ok(hwnd) = win.hwnd() {
+        let hwnd = HWND(hwnd.0);
+        // SAFETY: user32 validates the handle; only extended style bits change.
+        unsafe {
+            let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW.0 as isize;
+            let want = if activating {
+                ex & !(WS_EX_NOACTIVATE.0 as isize)
+            } else {
+                ex | WS_EX_NOACTIVATE.0 as isize
+            };
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_activating(win: &tauri::WebviewWindow, activating: bool) {
+    let _ = (win, activating);
+}
+
+/// Primary monitor layout + DPI, to notice monitor / scale changes.
+#[cfg(windows)]
+fn monitor_signature(app: &AppHandle) -> Option<(i32, i32, u32, u32, u64)> {
+    let m = app.primary_monitor().ok().flatten()?;
+    let (p, s) = (m.position(), m.size());
+    Some((p.x, p.y, s.width, s.height, m.scale_factor().to_bits()))
 }
 
 fn apply_geometry(
@@ -301,10 +464,17 @@ fn apply_geometry(
     let scale = monitor.scale_factor();
     let mpos = monitor.position();
     let msize = monitor.size();
-    // Window = panel + transparent margin; panel is top-centred inside it.
-    let win_w_logical = width + 2.0 * PAD_X;
-    let win_h_logical = height + PAD_B;
-    let win_w = (win_w_logical * scale) as i32;
+    // Windows: fixed canvas, the panel moves inside it. Elsewhere: panel + transparent margin.
+    let (win_w_logical, win_h_logical) = if cfg!(windows) {
+        (PANEL_W, PANEL_H)
+    } else {
+        (width + 2.0 * PAD_X, height + PAD_B)
+    };
+    let phys = (
+        (win_w_logical * scale).round() as u32,
+        (win_h_logical * scale).round() as u32,
+    );
+    let win_w = phys.0 as i32;
     let x = match position {
         IslandPosition::TopLeft => mpos.x + 24,
         IslandPosition::TopRight => mpos.x + msize.width as i32 - win_w - 24,
@@ -314,7 +484,8 @@ fn apply_geometry(
 
     {
         let mut rt = runtime().lock();
-        let size_changed = (rt.last_w - width).abs() > 0.5 || (rt.last_h - height).abs() > 0.5;
+        let size_changed = !cfg!(windows)
+            && ((rt.last_w - width).abs() > 0.5 || (rt.last_h - height).abs() > 0.5);
         let pos_changed = rt.last_x != x || rt.last_y != y;
         if !force && !size_changed && !pos_changed {
             return Ok(());
@@ -326,9 +497,16 @@ fn apply_geometry(
         rt.pending_resize = None;
     }
 
-    let _ = win.set_size(Size::Logical(LogicalSize::new(win_w_logical, win_h_logical)));
-    win.set_position(tauri::Position::Physical(PhysicalPosition::new(x, y)))
-        .map_err(|e| e.to_string())?;
+    let place = || {
+        let _ = win.set_size(Size::Physical(PhysicalSize::new(phys.0, phys.1)));
+        win.set_position(tauri::Position::Physical(PhysicalPosition::new(x, y)))
+            .map_err(|e| e.to_string())
+    };
+    place()?;
+    // Windows may clamp or lag a resize across monitors / DPI changes: retry once.
+    if win.inner_size().is_ok_and(|s| (s.width, s.height) != phys) {
+        place()?;
+    }
     let _ = win.set_always_on_top(true);
     prepare_transparent_window(&win);
     Ok(())
@@ -370,6 +548,8 @@ pub fn emit_assistant_state(app: &AppHandle, state: &str, message: Option<String
     let _ = ensure_window_geometry(app, &settings.island_position);
     if let Some(win) = app.get_webview_window(ISLAND_LABEL) {
         let _ = win.show();
+        // Windows: the cursor poll owns click-through.
+        #[cfg(not(windows))]
         let _ = win.set_ignore_cursor_events(false);
     }
 
@@ -497,7 +677,85 @@ fn clock_string() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
+/// ~60 Hz cursor hit-test (Windows): click-through outside the panel rect; collapse on an
+/// outside click or after the cursor stayed out for LEAVE_GRACE (re-sent while the UI lags),
+/// natively HARD_COLLAPSE after the first request. Parks while the Island is disabled.
+#[cfg(windows)]
+fn spawn_cursor_poll(app: AppHandle, gate: &'static PollGate) {
+    thread::Builder::new()
+        .name("soul-island-poll".into())
+        .spawn(move || {
+            let mut tick: u32 = 0;
+            let mut monitor = None;
+            let mut was_down = false;
+            let mut outside_since: Option<Instant> = None;
+            let mut asked_at: Option<Instant> = None;
+            loop {
+                gate.wait_until_active();
+                thread::sleep(Duration::from_millis(CURSOR_POLL_MS));
+                let Some(win) = app.get_webview_window(ISLAND_LABEL) else {
+                    continue;
+                };
+                tick = tick.wrapping_add(1);
+                if tick.is_multiple_of(30) {
+                    let now = monitor_signature(&app);
+                    if monitor.is_some() && now != monitor {
+                        eprintln!("[soul][island] monitor layout changed, re-placing");
+                        let position = load_settings(&app).unwrap_or_default().island_position;
+                        let (w, h) = runtime().lock().mode.default_size();
+                        let _ = apply_geometry(&app, &position, w, h, true);
+                        gate.forget_ignore_state();
+                    }
+                    monitor = now;
+                }
+                let Some((cx, cy)) = cursor_screen_pos() else {
+                    continue;
+                };
+                let (Ok(pos), Ok(scale)) = (win.outer_position(), win.scale_factor()) else {
+                    continue;
+                };
+                let x = (cx - pos.x) as f64 / scale;
+                let y = (cy - pos.y) as f64 / scale;
+                let on_island = gate.rect.lock().hit(x, y);
+                let want = u8::from(!on_island);
+                if !gate.held.load(Ordering::Relaxed) && gate.ignoring.load(Ordering::Relaxed) != want {
+                    gate.ignoring.store(want, Ordering::Relaxed);
+                    let _ = win.set_ignore_cursor_events(!on_island);
+                }
+
+                let down = left_button_down();
+                let clicked = down && !was_down;
+                was_down = down;
+                if on_island || runtime().lock().mode == IslandMode::Collapsed {
+                    outside_since = None;
+                    asked_at = None;
+                    continue;
+                }
+                let since = *outside_since.get_or_insert_with(Instant::now);
+                if !clicked && asked_at.is_none() && since.elapsed() < Duration::from_millis(LEAVE_GRACE_MS) {
+                    continue;
+                }
+                let first = *asked_at.get_or_insert_with(Instant::now);
+                if first.elapsed() >= Duration::from_millis(HARD_COLLAPSE_MS) {
+                    hard_collapse(&app);
+                    outside_since = None;
+                    asked_at = None;
+                }
+                let _ = app.emit("island://force-collapse", true);
+            }
+        })
+        .ok();
+}
+
+#[cfg(windows)]
+fn left_button_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    // SAFETY: plain key state query.
+    (unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } as u16 & 0x8000) != 0
+}
+
 /// Debounced flusher for window resizes requested by the frontend.
+#[cfg(not(windows))]
 fn start_resize_flusher(app: AppHandle) {
     thread::Builder::new()
         .name("soul-island-resize".into())
@@ -525,6 +783,7 @@ fn start_resize_flusher(app: AppHandle) {
 /// Safety net: while peek/expanded, poll the cursor. Outside the panel for LEAVE_GRACE
 /// => emit `island://force-collapse` (repeatedly, so a lost event can't strand the UI).
 /// Still not collapsed HARD_COLLAPSE after the first request => collapse natively.
+#[cfg(not(windows))]
 fn start_leave_watcher(app: AppHandle) {
     thread::Builder::new()
         .name("soul-island-leave".into())
@@ -568,11 +827,13 @@ fn hard_collapse(app: &AppHandle) {
     };
     eprintln!("[soul][island] UI did not collapse in time — collapsing natively");
     let settings = load_settings(app).unwrap_or_default();
+    gate().set_rect(IslandRect::for_panel(w, h, &settings.island_position));
     let _ = apply_geometry(app, &settings.island_position, w, h, true);
     let _ = app.emit("island://mode", IslandMode::Collapsed.as_str());
 }
 
 /// Cursor inside the visible panel (window minus transparent margin), with a little slack.
+#[cfg(not(windows))]
 fn cursor_over_panel(app: &AppHandle) -> Result<bool, String> {
     let Some((cx, cy)) = cursor_screen_pos() else {
         return Ok(true);
@@ -655,13 +916,18 @@ pub async fn island_set_mode(
                 if next == IslandMode::Collapsed {
                     rt.collapsed_size = (w, h);
                 }
-                rt.pending_resize = Some((w, h, Instant::now()));
+                // Windows keeps the fixed canvas; only the hit rect follows the panel.
+                if !cfg!(windows) {
+                    rt.pending_resize = Some((w, h, Instant::now()));
+                }
             }
 
             let settings = load_settings(&app)?;
+            gate().set_rect(IslandRect::for_panel(w, h, &settings.island_position));
             if !settings.island_enabled {
                 return Ok(());
             }
+            #[cfg(not(windows))]
             if let Some(win) = app.get_webview_window(ISLAND_LABEL) {
                 let _ = win.set_ignore_cursor_events(false);
             }
@@ -671,6 +937,46 @@ pub async fn island_set_mode(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Exact rendered panel rect (window-logical px) once the morph has settled.
+#[tauri::command]
+pub fn island_set_rect(x: f64, y: f64, width: f64, height: f64) {
+    if [x, y, width, height].iter().all(|v| v.is_finite()) {
+        gate().set_rect(IslandRect { x, y, w: width.max(0.0), h: height.max(0.0) });
+    }
+}
+
+/// A text field in the Island wants the keyboard (true) or is done with it (false).
+#[tauri::command]
+pub fn island_focus_window(app: AppHandle, focused: bool) {
+    if let Some(win) = app.get_webview_window(ISLAND_LABEL) {
+        set_activating(&win, focused);
+        if focused {
+            let _ = win.set_focus();
+        }
+    }
+}
+
+/// Undo a WebView DPI mismatch (CSS px != device px / scale) with a zoom; true = zoom changed.
+#[tauri::command]
+pub fn island_fit_zoom(app: AppHandle, dpr: f64) -> bool {
+    let Some(win) = app.get_webview_window(ISLAND_LABEL) else {
+        return false;
+    };
+    let Ok(scale) = win.scale_factor() else {
+        return false;
+    };
+    let mut rt = runtime().lock();
+    let Some(zoom) = calculate_zoom_correction(rt.zoom, scale, dpr) else {
+        return false;
+    };
+    if win.set_zoom(zoom).is_err() {
+        return false;
+    }
+    eprintln!("[soul][island] webview zoom {:.3} -> {zoom:.3} (scale {scale}, dpr {dpr})", rt.zoom);
+    rt.zoom = zoom;
+    true
 }
 
 /// Back-compat shim.
@@ -776,4 +1082,43 @@ pub fn on_settings_changed(app: &AppHandle, settings: &Settings) {
         let _ = app.emit("island://settings", settings.island_sections.clone());
     }
     let _ = app.emit("soul://appearance", settings.appearance.clone());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zoom_correction() {
+        assert_eq!(calculate_zoom_correction(1.0, 1.5, 1.5), None);
+        assert_eq!(calculate_zoom_correction(1.0, 1.5, 1.51), None);
+        assert_eq!(calculate_zoom_correction(1.0, 1.5, 0.0), None);
+        assert_eq!(calculate_zoom_correction(1.0, f64::NAN, 1.0), None);
+        assert_eq!(calculate_zoom_correction(1.0, 1.0, 1.25), Some(0.8));
+        assert_eq!(calculate_zoom_correction(0.8, 1.0, 1.0), None);
+        assert_eq!(calculate_zoom_correction(1.0, 2.0, 1.0), Some(2.0));
+        assert_eq!(calculate_zoom_correction(1.0, 8.0, 1.0), Some(4.0));
+    }
+
+    #[test]
+    fn panel_rect_placement() {
+        let c = IslandRect::for_panel(COLLAPSED_W, COLLAPSED_H, &IslandPosition::TopCenter);
+        assert_eq!(c, IslandRect { x: 230.0, y: 0.0, w: 220.0, h: 40.0 });
+        let l = IslandRect::for_panel(PEEK_W, PEEK_H, &IslandPosition::TopLeft);
+        assert_eq!(l.x, PAD_X);
+        let r = IslandRect::for_panel(EXPANDED_W, EXPANDED_H, &IslandPosition::TopRight);
+        assert_eq!(r.x + r.w, PANEL_W - PAD_X);
+        assert_eq!(IslandRect::for_panel(900.0, 40.0, &IslandPosition::TopCenter).x, 0.0);
+    }
+
+    #[test]
+    fn hit_test_uses_margin() {
+        let r = IslandRect { x: 230.0, y: 0.0, w: 220.0, h: 40.0 };
+        assert!(r.hit(300.0, 20.0));
+        assert!(r.hit(230.0 - HIT_MARGIN, 0.0));
+        assert!(r.hit(450.0 + HIT_MARGIN, 40.0 + HIT_MARGIN));
+        assert!(!r.hit(230.0 - HIT_MARGIN - 1.0, 20.0));
+        assert!(!r.hit(300.0, 40.0 + HIT_MARGIN + 1.0));
+        assert!(!IslandRect::default().hit(0.0, 0.0));
+    }
 }
