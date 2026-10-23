@@ -45,7 +45,7 @@ function planWindow(v: unknown): PlanWindow | undefined {
   if (!w) return undefined;
   const used = num(w.used_percentage ?? w.usedPercentage ?? w.used_percent ?? w.usedPercent);
   if (used === undefined) return undefined;
-  return { usedPct: Math.min(100, Math.max(0, used)), resetsAt: toMs(w.resets_at ?? w.resetsAt) ?? Infinity };
+  return { usedPct: Math.min(100, Math.max(0, used)), resetsAt: toMs(w.resets_at ?? w.reset_at ?? w.resetsAt) ?? Infinity };
 }
 
 export function parseClaudePlan(raw: unknown, now: number): PlanUsage | null {

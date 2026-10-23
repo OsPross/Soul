@@ -19,7 +19,7 @@ test("Claude statusLine rate limits", () => {
     session_id: "s",
     updated_at_ms: now - 1000,
     rate_limits: {
-      five_hour: { used_percentage: 73.4, resets_at: Math.floor((now + 2 * H) / 1000) },
+      five_hour: { used_percentage: 73.4, reset_at: Math.floor((now + 2 * H) / 1000) }, // older spelling
       seven_day: { used_percentage: 120, resets_at: new Date(now + 50 * H).toISOString() },
     },
   };
