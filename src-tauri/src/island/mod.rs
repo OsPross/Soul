@@ -15,6 +15,7 @@ pub(crate) mod clipboard;
 pub mod debug_log;
 pub mod drop;
 mod media;
+pub mod plan;
 mod watchdog;
 
 use crate::config::{load_settings, save_settings, IslandPosition, Settings};

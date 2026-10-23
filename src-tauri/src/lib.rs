@@ -617,6 +617,11 @@ fn ask_followup(app: AppHandle, text: Option<String>, with_audio: bool) -> Resul
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// `soul --claude-statusline` (Claude Code statusLine relay, `island/plan.rs`).
+pub fn claude_statusline() {
+    island::plan::run_statusline();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -682,6 +687,10 @@ pub fn run() {
             agent::text_action::text_result_paste,
             island::drop::island_file_active,
             island::drop::island_ask_file,
+            island::plan::codex_plan_usage,
+            island::plan::claude_plan_status,
+            island::plan::claude_plan_preview,
+            island::plan::claude_plan_apply,
             memory_list,
             memory_add,
             memory_update,

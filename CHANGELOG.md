@@ -8,6 +8,11 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Limity planów Claude Code i Codex (Settings → Wyspa → Limity planów).** Pills in the expanded
+  Island header („● Claude 73%”, „● Codex 18%”) open a card with the 5-hour and weekly bars, reset
+  times and Codex free resets. Claude Code reports limits only to its status line, so Soul offers a
+  one-click statusLine relay with a preview of the `~/.claude/settings.json` change and a dated
+  backup; your existing status line keeps working and comes back on uninstall.
 - **Upuść plik na wyspę.** Drag a file or screenshot (image, PDF, text, code, CSV, JSON, logs, up to
   20 MB) from Explorer onto the Island, then ask about it by typing or by holding the talk key. The
   answer shows on the Island with Kopiuj / Wklej. Dropped files are copied into Soul's own inbox and

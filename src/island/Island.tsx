@@ -25,6 +25,18 @@ import { playCue, type Cue } from "./sounds";
 import { tr } from "../i18n";
 import { hasPendingUpdate, installUpdate, useUpdate, type UpdateStatus } from "../lib/update";
 import { holdsCard, mustCollapseFor, pickStage, type Stage } from "./stage";
+import {
+  creditsLabel,
+  dominantPct,
+  effectivePct,
+  parseClaudePlan,
+  parseCodexPlan,
+  planColor,
+  resetLabel,
+  type CodexPlanUsage,
+  type PlanUsage,
+  type PlanWindow,
+} from "./plan";
 
 /** Transparent window margin around the panel; must match PAD_X / PAD_B in island/mod.rs. */
 const PAD_X = 20;
@@ -64,6 +76,8 @@ interface IslandSections {
   plans: boolean;
   quickApps: boolean;
   quickSettings: boolean;
+  claudePlan?: boolean;
+  codexPlan?: boolean;
 }
 
 interface IslandSnapshot {
@@ -667,6 +681,16 @@ export default function Island() {
 
   const statusLabel = labelFor(shown, t);
 
+  const plan = usePlanUsage(Boolean(sections.claudePlan), Boolean(sections.codexPlan), mode !== "collapsed");
+  const [planOpen, setPlanOpen] = useState<"claude" | "codex" | null>(null);
+  useEffect(() => {
+    if (mode !== "expanded") setPlanOpen(null);
+  }, [mode]);
+  const planPills = [
+    sections.claudePlan && { id: "claude" as const, label: "Claude", pct: dominantPct(plan.claude, Date.now()) },
+    sections.codexPlan && { id: "codex" as const, label: "Codex", pct: dominantPct(plan.codex, Date.now()) },
+  ].filter((x): x is { id: "claude" | "codex"; label: string; pct: number | null } => Boolean(x));
+
   return (
     <div
       {...dragHandlers}
@@ -719,12 +743,47 @@ export default function Island() {
                   wave={shown.state === "listening" ? "mic" : shown.state === "speaking" ? "voice" : null}
                   accent={accent}
                   onHeader={collapse}
+                  pills={
+                    planPills.length > 0 && (
+                      <div className="flex shrink-0 gap-1">
+                        {planPills.map((p) => (
+                          <PlanPill
+                            key={p.id}
+                            label={p.label}
+                            pct={p.pct}
+                            active={planOpen === p.id}
+                            onClick={() => {
+                              setPlanOpen((o) => (o === p.id ? null : p.id));
+                              if (p.id === "codex") plan.refreshCodex(false);
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )
+                  }
                   tabs={tabs}
                   tab={tab}
                   setTab={setTab}
                 >
-                  {tab === "now" && <NowPlayingPanel np={np} anchor={anchor} onMedia={onMedia} accent={accent} />}
-                  {tab === "clipboard" && (
+                  {planOpen && (
+                    <PlanCard
+                      title={planOpen === "claude" ? "Claude Code" : "Codex"}
+                      usage={planOpen === "claude" ? plan.claude : plan.codex}
+                      error={planOpen === "codex" ? plan.codexError : null}
+                      empty={
+                        planOpen === "claude"
+                          ? tr(
+                              cfg.uiLang,
+                              "Brak danych. Zainstaluj przekaźnik statusLine (Ustawienia → Wyspa) i użyj Claude Code.",
+                              "No data yet. Install the statusLine relay (Settings → Island) and use Claude Code.",
+                            )
+                          : tr(cfg.uiLang, "Pobieram limity z Codex…", "Reading limits from Codex…")
+                      }
+                      onRefresh={() => (planOpen === "claude" ? plan.refreshClaude() : plan.refreshCodex(true))}
+                    />
+                  )}
+                  {!planOpen && tab === "now" && <NowPlayingPanel np={np} anchor={anchor} onMedia={onMedia} accent={accent} />}
+                  {!planOpen && tab === "clipboard" && (
                     <ClipboardPanel
                       items={clipboard}
                       onClear={() => {
@@ -733,7 +792,7 @@ export default function Island() {
                       }}
                     />
                   )}
-                  {tab === "plans" && (
+                  {!planOpen && tab === "plans" && (
                     <PlansPanel
                       plans={plans}
                       timers={timers}
@@ -741,8 +800,8 @@ export default function Island() {
                       onCancelTimer={(id) => invoke("timer_cancel", { id }).catch(() => undefined)}
                     />
                   )}
-                  {tab === "apps" && <AppsPanel pinned={pinned} setPinned={setPinned} />}
-                  {tab === "settings" && <QuickSettingsPanel />}
+                  {!planOpen && tab === "apps" && <AppsPanel pinned={pinned} setPinned={setPinned} />}
+                  {!planOpen && tab === "settings" && <QuickSettingsPanel />}
                 </Expanded>
               ) : mode === "peek" ? (
                 <Peek
@@ -756,6 +815,7 @@ export default function Island() {
                   onOpen={toggle}
                   update={pending ? update : null}
                   onInstallUpdate={onInstallUpdate}
+                  plans={planPills}
                 />
               ) : (
                 <Collapsed
@@ -1385,7 +1445,9 @@ function Peek({
   onOpen,
   update,
   onInstallUpdate,
+  plans,
 }: {
+  plans: { id: string; label: string; pct: number | null }[];
   spirit: React.ReactNode;
   spiritLayout?: string;
   np: NowPlaying;
@@ -1400,6 +1462,16 @@ function Peek({
   const t = useT();
   const anim = useAnim();
   const updateLine = update?.version ? t("update.newVersion", { v: update.version }) : null;
+  const planDots = plans.length > 0 && (
+    <div className="flex shrink-0 flex-col items-end gap-0.5 text-[10.5px] tabular-nums text-white/60">
+      {plans.map((p) => (
+        <span key={p.id} title={p.label} className="inline-flex items-center gap-1">
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: planColor(p.pct) }} />
+          {p.pct === null ? "–" : `${Math.round(p.pct)}%`}
+        </span>
+      ))}
+    </div>
+  );
   if (!media) {
     return (
       <div className="flex h-full cursor-default items-center gap-3 px-3.5" onClick={onOpen}>
@@ -1408,6 +1480,7 @@ function Peek({
           <div className="text-[13px] font-semibold tabular-nums">{clock}</div>
           <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? updateLine ?? t("island.idleHint")}</div>
         </div>
+        {planDots}
         {update && !status && <UpdateButton update={update} onClick={onInstallUpdate} accent={anim.cfg.accent} />}
       </div>
     );
@@ -1420,6 +1493,7 @@ function Peek({
         <Marquee text={np.title} className="text-[13px] font-semibold" />
         <div className="truncate text-[11px] text-[var(--soul-muted)]">{status ?? updateLine ?? np.artist}</div>
       </div>
+      {planDots}
       {update && !status && <UpdateButton update={update} onClick={onInstallUpdate} accent={anim.cfg.accent} />}
       <Transport playing={np.playing} onMedia={onMedia} size={30} />
     </div>
@@ -1458,11 +1532,13 @@ function Expanded({
   wave,
   accent,
   onHeader,
+  pills,
   tabs,
   tab,
   setTab,
   children,
 }: {
+  pills?: React.ReactNode;
   spirit: React.ReactNode;
   spiritLayout?: string;
   title: string;
@@ -1490,6 +1566,7 @@ function Expanded({
             <div className="truncate text-[12px] text-[var(--soul-muted)]">{subtitle}</div>
           )}
         </div>
+        {pills}
         <span
           className="shrink-0 rounded-full border border-white/10 px-2.5 py-1 text-[10.5px] font-medium"
           style={{ color: accent, background: "rgb(255 255 255 / 0.05)" }}
@@ -1541,6 +1618,130 @@ function Expanded({
 }
 
 export type { IslandMode };
+
+/** Claude Code (statusLine relay file, every 15 s) and Codex (`codex app-server`, when stale > 60 s). */
+function usePlanUsage(claudeOn: boolean, codexOn: boolean, open: boolean) {
+  const [claude, setClaude] = useState<PlanUsage | null>(null);
+  const [codex, setCodex] = useState<CodexPlanUsage | null>(null);
+  const [codexError, setCodexError] = useState<string | null>(null);
+  const codexAt = useRef(0);
+  const refreshClaude = useCallback(() => {
+    invoke<{ usage: unknown }>("claude_plan_status")
+      .then((st) => setClaude(parseClaudePlan(st.usage, Date.now())))
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!claudeOn) return setClaude(null);
+    refreshClaude();
+    const id = window.setInterval(refreshClaude, 15_000);
+    return () => window.clearInterval(id);
+  }, [claudeOn, refreshClaude]);
+  const refreshCodex = useCallback(
+    (force: boolean) => {
+      if (!codexOn || (!force && Date.now() - codexAt.current < 60_000)) return;
+      codexAt.current = Date.now();
+      invoke("codex_plan_usage")
+        .then((r) => {
+          setCodex(parseCodexPlan(r, Date.now()));
+          setCodexError(null);
+        })
+        .catch((e) => String(e) !== "busy" && setCodexError(String(e)));
+    },
+    [codexOn],
+  );
+  useEffect(() => {
+    if (!codexOn) {
+      setCodex(null);
+      codexAt.current = 0;
+    } else if (open) refreshCodex(false);
+  }, [codexOn, open, refreshCodex]);
+  return { claude, codex, codexError, refreshClaude, refreshCodex };
+}
+
+function PlanPill({ label, pct, active, onClick }: { label: string; pct: number | null; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation(); // the header click collapses the Island
+        onClick();
+      }}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10.5px] font-medium tabular-nums transition-colors ${
+        active ? "border-white/25 bg-white/12" : "border-white/10 bg-white/5 hover:bg-white/10"
+      }`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: planColor(pct) }} />
+      {label} {pct === null ? "–" : `${Math.round(pct)}%`}
+    </button>
+  );
+}
+
+/** 5-hour and 7-day bars with reset times (+ Codex free resets). */
+function PlanCard({
+  title,
+  usage,
+  error,
+  empty,
+  onRefresh,
+}: {
+  title: string;
+  usage: PlanUsage | CodexPlanUsage | null;
+  error: string | null;
+  empty: string;
+  onRefresh: () => void;
+}) {
+  const lang = useAnim().cfg.uiLang;
+  const now = Date.now();
+  const codex = usage as CodexPlanUsage | null;
+  const row = (name: string, w: PlanWindow | undefined) => {
+    if (!w) return null;
+    const pct = effectivePct(w, now);
+    return (
+      <div key={name}>
+        <div className="flex items-baseline justify-between text-[11.5px]">
+          <span className="text-white/80">{name}</span>
+          <span className="tabular-nums text-white/60">
+            {Math.round(pct)}% · {resetLabel(w, now, lang)}
+          </span>
+        </div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: planColor(pct) }} />
+        </div>
+      </div>
+    );
+  };
+  const updated = usage ? new Date(usage.updatedAt) : null;
+  return (
+    <div className="space-y-2.5 px-0.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] font-semibold">{title}</span>
+        {codex?.planType && <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] uppercase text-white/70">{codex.planType}</span>}
+        <span className="ml-auto text-[10.5px] text-white/45">
+          {updated && `${tr(lang, "Zaktualizowano", "Updated")} ${updated.getHours()}:${String(updated.getMinutes()).padStart(2, "0")}`}
+        </span>
+        <Press onClick={onRefresh} className="soul-btn-ghost rounded-full px-2.5 py-1 text-[11px]" aria-label={tr(lang, "Odśwież", "Refresh")}>
+          ↻
+        </Press>
+      </div>
+      {usage ? (
+        <>
+          {row(tr(lang, "Limit 5-godzinny", "5-hour limit"), usage.fiveHour)}
+          {row(tr(lang, "Limit tygodniowy", "Weekly limit"), usage.sevenDay)}
+          {codex?.resetCredits !== undefined && (
+            <div className="text-[11.5px] text-white/70">
+              {tr(lang, "Darmowe resety: ", "Free resets: ")}
+              {creditsLabel(codex.resetCredits, lang)}
+              {codex.resetCreditExpiresAt !== undefined &&
+                ` · ${tr(lang, "ważne do", "expire")} ${new Date(codex.resetCreditExpiresAt).toLocaleDateString(lang === "en" ? "en-GB" : "pl-PL")}`}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="text-[12px] text-white/60">{error ?? empty}</div>
+      )}
+    </div>
+  );
+}
 
 /** Running computer-agent task: spirit (thinking), current step, n / max, progress line, Stop. */
 function AgentCard({

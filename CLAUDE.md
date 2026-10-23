@@ -135,6 +135,12 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   `<app data>/inbox` (20 MB, swept after 7 days); `island_ask_file` / talk key while the card is up
   (`active_file`, checked first in `route_smart_transcript`) → `gemini::build_file_ask_body` → `text_action::show_result`).
   The Windows cursor poll accepts input on the whole canvas while the left button is held (OLE drop target).
+  `plan.rs` (plan gauges, `IslandSections.claudePlan`/`codexPlan`, frontend `island/plan.ts` pure + `tests/ui/plan.test.ts`):
+  `codex_plan_usage` = `codex app-server` JSON-RPC `account/rateLimits/read` (one at a time, 15 s, process tree killed,
+  only `rateLimits`/`rateLimitResetCredits` returned); `main.rs` handles `--claude-statusline` before Tauri
+  (`run_statusline`: stdin `rate_limits` → `<app data>/claude-plan.json`, then the saved `statusline-previous.json`
+  command via Git Bash / `sh`); `claude_plan_preview`/`claude_plan_apply` edit `~/.claude/settings.json` (FNV-1a
+  fingerprint, dated backup, atomic rename; `serde_json` `preserve_order` keeps the user's key order).
 - `platform/` – OS abstraction (below).
 
 ### Platform trait (`platform/mod.rs`)

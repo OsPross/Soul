@@ -637,6 +637,90 @@ export function VoicePage({ s }: P) {
 }
 
 // ───────────────────────────── Wyspa ─────────────────────────────
+const ALL_SECTIONS: IslandSections = { nowPlaying: true, clipboard: true, plans: true, quickApps: true, quickSettings: true };
+
+interface RelayStatus {
+  installed: boolean;
+  settingsPath: string;
+}
+interface RelayPreview {
+  diff: string;
+  backup: string;
+  settingsPath: string;
+  fingerprint: string;
+}
+
+/** Claude Code's statusLine → `soul --claude-statusline` (shows the settings.json change first). */
+function ClaudeRelay() {
+  const lang = useLang();
+  const [status, setStatus] = useState<RelayStatus | null>(null);
+  const [preview, setPreview] = useState<RelayPreview | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const refresh = () =>
+    invoke<RelayStatus>("claude_plan_status")
+      .then(setStatus)
+      .catch((e) => setMsg(String(e)));
+  useEffect(() => {
+    void refresh();
+  }, []);
+  const install = !status?.installed;
+  const showPreview = () => {
+    setMsg(null);
+    invoke<RelayPreview>("claude_plan_preview", { install })
+      .then(setPreview)
+      .catch((e) => setMsg(String(e)));
+  };
+  const apply = () => {
+    if (!preview) return;
+    invoke<string>("claude_plan_apply", { install, fingerprint: preview.fingerprint })
+      .then((m) => {
+        setMsg(m);
+        setPreview(null);
+        void refresh();
+      })
+      .catch((e) => setMsg(String(e)));
+  };
+  return (
+    <div className="space-y-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-[12px]">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-white/75">
+          {status?.installed
+            ? tr(lang, "Przekaźnik statusLine jest zainstalowany.", "The statusLine relay is installed.")
+            : tr(
+                lang,
+                "Claude Code przekazuje limity tylko do polecenia statusLine. Soul podłącza się tam, a Twój dotychczasowy statusLine dalej działa.",
+                "Claude Code only reports limits to its statusLine command. Soul plugs in there; your current status line keeps working.",
+              )}
+        </span>
+        <Button onClick={showPreview}>
+          {install ? tr(lang, "Podgląd instalacji", "Preview install") : tr(lang, "Podgląd odinstalowania", "Preview uninstall")}
+        </Button>
+      </div>
+      {preview && (
+        <>
+          <div className="truncate text-white/50">{preview.settingsPath}</div>
+          <pre className="soul-scroll max-h-40 overflow-auto rounded-lg bg-black/30 p-2 font-mono text-[11px] leading-snug text-white/80">
+            {preview.diff || tr(lang, "(bez zmian)", "(no changes)")}
+          </pre>
+          {preview.backup && (
+            <div className="truncate text-white/50">
+              {tr(lang, "Kopia zapasowa: ", "Backup: ")}
+              {preview.backup}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setPreview(null)}>{tr(lang, "Anuluj", "Cancel")}</Button>
+            <Button variant={install ? "primary" : "danger"} onClick={apply}>
+              {install ? tr(lang, "Zainstaluj", "Install") : tr(lang, "Odinstaluj", "Uninstall")}
+            </Button>
+          </div>
+        </>
+      )}
+      {msg && <div className="text-white/60">{msg}</div>}
+    </div>
+  );
+}
+
 export function IslandPage({ s }: P) {
   const lang = useLang();
   const anim = useAnim();
@@ -692,20 +776,37 @@ export function IslandPage({ s }: P) {
                 checked={form.islandSections?.[key] ?? true}
                 onChange={(v) =>
                   patch({
-                    islandSections: {
-                      nowPlaying: true,
-                      clipboard: true,
-                      plans: true,
-                      quickApps: true,
-                      quickSettings: true,
-                      ...form.islandSections,
-                      [key]: v,
-                    },
+                    islandSections: { ...ALL_SECTIONS, ...form.islandSections, [key]: v },
                   })
                 }
               />
             </Row>
           ))}
+        </div>
+      </Card>
+      <Card
+        title={tr(lang, "Limity planów", "Plan usage")}
+        description={tr(
+          lang,
+          "Procent zużycia limitu 5-godzinnego i tygodniowego w nagłówku rozwiniętej wyspy.",
+          "5-hour and weekly usage in the expanded Island header.",
+        )}
+      >
+        <div className="space-y-3">
+          {(
+            [
+              ["claudePlan", "Limity planu Claude Code", "Claude Code plan usage"],
+              ["codexPlan", "Limity planu Codex", "Codex plan usage"],
+            ] as const
+          ).map(([key, pl, en]) => (
+            <Row key={key} label={lang === "en" ? en : pl} disabled={!on}>
+              <Toggle
+                checked={form.islandSections?.[key] ?? false}
+                onChange={(v) => patch({ islandSections: { ...ALL_SECTIONS, ...form.islandSections, [key]: v } })}
+              />
+            </Row>
+          ))}
+          {form.islandSections?.claudePlan && <ClaudeRelay />}
         </div>
       </Card>
       <Callout>

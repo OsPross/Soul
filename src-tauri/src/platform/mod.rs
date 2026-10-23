@@ -21,7 +21,7 @@ pub mod x11_capture;
 #[cfg(target_os = "linux")]
 mod x11_hook;
 #[cfg(target_os = "windows")]
-mod windows;
+pub(crate) mod windows;
 #[cfg(target_os = "windows")]
 mod windows_hook;
 #[cfg(target_os = "windows")]

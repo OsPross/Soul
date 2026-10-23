@@ -71,6 +71,12 @@ pub struct IslandSections {
     pub plans: bool,
     pub quick_apps: bool,
     pub quick_settings: bool,
+    /// Claude Code plan usage pill (statusLine relay → `claude-plan.json`).
+    #[serde(default)]
+    pub claude_plan: bool,
+    /// Codex plan usage pill (`codex app-server`).
+    #[serde(default)]
+    pub codex_plan: bool,
 }
 
 impl Default for IslandSections {
@@ -81,6 +87,8 @@ impl Default for IslandSections {
             plans: true,
             quick_apps: true,
             quick_settings: true,
+            claude_plan: false,
+            codex_plan: false,
         }
     }
 }

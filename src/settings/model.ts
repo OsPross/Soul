@@ -6,6 +6,8 @@ export interface IslandSections {
   plans: boolean;
   quickApps: boolean;
   quickSettings: boolean;
+  claudePlan?: boolean;
+  codexPlan?: boolean;
 }
 
 export type Personality = "neutral" | "ziomek" | "professional" | "sarcastic";
