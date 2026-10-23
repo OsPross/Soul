@@ -10,6 +10,7 @@ mod i18n;
 mod dev_samples;
 mod island;
 mod memory;
+mod notes;
 mod platform;
 mod price_watch;
 mod scenes;
@@ -724,6 +725,17 @@ pub fn run() {
             speech::speech_models_status,
             speech::speech_models_download,
             speech::speech_models_remove,
+            notes::notes_state,
+            notes::notes_start,
+            notes::notes_stop,
+            notes::notes_rename,
+            notes::notes_rename_speaker,
+            notes::notes_toggle_todo,
+            notes::notes_delete,
+            notes::notes_summarize,
+            notes::notes_retry,
+            notes::notes_markdown,
+            notes::notes_export,
             timers::timers_list,
             timers::timer_cancel,
             updater::update_status,
@@ -757,6 +769,7 @@ pub fn run() {
             }
             island::init(app.handle());
             speech::init(app.handle());
+            notes::init(app.handle());
             coding_agents::pipe::start(app.handle().clone());
             timers::start_worker(app.handle().clone());
             updater::init(app.handle());
@@ -941,6 +954,7 @@ fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             "wake" => wake::toggle_from_tray(app),
             "quit" => {
                 agent::computer::vio::shutdown();
+                notes::shutdown(app);
                 app.exit(0);
             }
             _ => {}

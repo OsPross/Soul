@@ -96,12 +96,12 @@ fn focus_owner(_owners: &[u32], _cwd: Option<&str>) -> bool {
 }
 
 #[cfg(windows)]
-fn reveal(dir: &Path) -> bool {
+pub(crate) fn reveal(dir: &Path) -> bool {
     crate::platform::windows::shell_open(&dir.to_string_lossy()).is_ok()
 }
 
 #[cfg(not(windows))]
-fn reveal(dir: &Path) -> bool {
+pub(crate) fn reveal(dir: &Path) -> bool {
     crate::island::plan::command(Path::new("xdg-open")).arg(dir).stdin(Stdio::null()).spawn().is_ok()
 }
 
