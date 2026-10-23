@@ -1377,7 +1377,12 @@ fn dev_utterance(app: &AppHandle, file: &std::path::Path) {
     gate.arm();
     let _ = emit_overlay(app, "listening", None);
     thread::sleep(held.saturating_sub(tap));
-    on_smart_released(app);
+    // Like talk.rs `Mode::Confirm`: with a card waiting, the utterance answers it.
+    if agent::confirm::is_pending(app) {
+        agent::confirm::on_answer_released(app);
+    } else {
+        on_smart_released(app);
+    }
 }
 
 /// Dev builds only: `<app data>/dev-transcript.txt` is routed like a Smart talk-key transcript,

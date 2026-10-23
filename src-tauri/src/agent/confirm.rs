@@ -227,6 +227,8 @@ pub fn on_answer_released(app: &AppHandle) {
                 }
                 None => eprintln!("[soul][agent] coding approval: no yes/no in the spoken answer ({} chars)", text.chars().count()),
             }
+            // Nothing follows the answer here (no command turn), so drop the „listening” banner.
+            crate::schedule_hide(&app, 0);
             return;
         }
         // A free-text question takes the whole answer.
