@@ -147,9 +147,19 @@ fn foreground_app(app: &AppHandle) -> Option<String> {
     (!shell.contains(&lower.as_str())).then_some(stem)
 }
 
-fn sink(ch: &Shared) -> audio::Sink {
+/// `mute_while`: Soul's own spoken replies („Nagrywam rozmowę.”) are silenced on the system
+/// channel (zeros keep the timing), or they would show up as another participant.
+fn sink(ch: &Shared, mute_while: Option<Arc<crate::voice::VoicePlayer>>) -> audio::Sink {
     let ch = Arc::clone(ch);
+    let mut silent = Vec::new();
     Box::new(move |samples: &[f32]| {
+        let samples = if mute_while.as_ref().is_some_and(|v| v.is_speaking()) {
+            silent.clear();
+            silent.resize(samples.len(), 0.0);
+            &silent[..]
+        } else {
+            samples
+        };
         let mut c = ch.lock();
         if let Some(w) = c.wav.as_mut() {
             if let Err(e) = w.write(samples) {
@@ -185,8 +195,9 @@ pub fn start(app: &AppHandle) -> Result<String, String> {
     };
     let channels = [open("mic.wav")?, open("system.wav")?];
     let mic_name = Some(settings.microphone.clone()).filter(|m| !m.trim().is_empty());
-    let mic = audio::Capture::start(audio::Source::Mic(mic_name), sink(&channels[0]))?;
-    let system = match audio::Capture::start(audio::Source::System, sink(&channels[1])) {
+    let voice = Arc::clone(&app.state::<crate::AppState>().voice);
+    let mic = audio::Capture::start(audio::Source::Mic(mic_name), sink(&channels[0], None))?;
+    let system = match audio::Capture::start(audio::Source::System, sink(&channels[1], Some(voice))) {
         Ok(c) => Some(c),
         Err(e) => {
             eprintln!("[soul][notes] system audio unavailable, mic only: {e}");
