@@ -16,6 +16,9 @@ changelog shown in Settings → O aplikacji / About.
   questions get option chips. The Island shows what the agent is doing („Claude · Edytuje · mod.rs
   +12 −4”), and the new **Agenci** tab lists sessions with ↗ (jump to the terminal) and a Live Diff
   of every edited file.
+- **Podsumowanie kodowania (Settings → Agent).** This week / last week: coding time (parallel
+  sessions counted once), sessions, files changed, `+added −removed` lines, commands, approvals, top
+  agent and project. Kept locally for 12 weeks as counts only — no commands, prompts or file paths.
 - **Limity planów Claude Code i Codex (Settings → Wyspa → Limity planów).** Pills in the expanded
   Island header („● Claude 73%”, „● Codex 18%”) open a card with the 5-hour and weekly bars, reset
   times and Codex free resets. Claude Code reports limits only to its status line, so Soul offers a

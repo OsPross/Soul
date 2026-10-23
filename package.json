@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test:ui": "node --experimental-strip-types --test tests/ui/stage.test.ts tests/ui/plan.test.ts tests/ui/diff.test.ts tests/ui/codingAgents.test.ts",
+    "test:ui": "node --experimental-strip-types --test tests/ui/stage.test.ts tests/ui/plan.test.ts tests/ui/diff.test.ts tests/ui/codingAgents.test.ts tests/ui/recap.test.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "test:voice": "node scripts/test-voice.mjs",

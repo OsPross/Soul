@@ -166,6 +166,25 @@ accessibility) or after a failed step. Simple media / volume / timer / open-clos
 - Wayland: not supported (clear message). Test harness: `npm run test:agent [-- --real]` → `tests/agent/report.md`
   (takes over mouse and keyboard for a few minutes). Design: [`docs/agent.md`](docs/agent.md).
 
+### Coding agents (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI)
+
+**Settings → Agent → Integracje z agentami kodującymi:** *Podgląd diffa i instaluj* shows the exact change to the
+agent's config (`~/.claude/settings.json`, `~/.codex/hooks.json`, `~/.cursor/hooks.json`, `~/.gemini/settings.json`,
+`~/.copilot/hooks/soul.json`), writes a dated backup (`<file>.bak-YYYYMMDD-HHMMSS`) and adds `soul --agent-hook` hooks;
+your other hooks and `statusLine` stay. The hook talks to Soul over a same-user named pipe / Unix socket and never
+blocks the agent (Soul closed → it exits at once).
+
+- **Approvals:** Claude Code / Codex / Copilot permission prompts show on the Island — **Zezwól** / **Odrzuć**, or hold
+  the talk key and say „tak” / „zezwól” / „nie” / „odrzuć”; **W terminalu** (or no answer) hands the prompt back to the
+  terminal. Claude Code's multiple-choice questions get option chips. One card at a time; a second prompt goes to its
+  terminal.
+- **Live:** the idle Island shows what the agent does („Claude · Edytuje · mod.rs +12 −4”); the expanded **Agenci**
+  tab lists sessions, ↗ jumps to the session's terminal / IDE window, an edited file opens a Live Diff (↗ opens it in
+  VS Code).
+- **Recap:** Settings → Agent → *Podsumowanie kodowania* (this / last week: time, sessions, files, lines, commands,
+  approvals, top agent / project). Stored in `recap.json` in the app data dir: counts only, never commands, prompts,
+  paths or file contents.
+
 ## Install
 
 Download the latest installer from **[GitHub Releases](https://github.com/OsPross/Soul/releases/latest)**.

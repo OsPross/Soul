@@ -197,6 +197,8 @@ where
         }
     }
     if event != "PermissionRequest" || !super::relay::takes_decisions(&agent) {
+        let (a, p) = (app.clone(), payload.clone());
+        tauri::async_runtime::spawn_blocking(move || super::recap::observe(&a, &p));
         let _ = app.emit_to("island", "island://coding-hook", &payload);
         return;
     }
@@ -219,6 +221,7 @@ where
     }
     if let Some(d) = &decision {
         eprintln!("[soul][agent] coding agent permission answered from the Island");
+        super::recap::record_decision(&app, &agent, d);
         let _ = w.write_all(format!("{}\n", json!({ "decision": d })).as_bytes()).await;
         let _ = w.shutdown().await;
     }

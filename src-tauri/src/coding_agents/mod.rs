@@ -3,11 +3,12 @@
 //! The agents run `soul --agent-hook` as a hook (`relay.rs`, a short-lived process that never
 //! blocks the agent), which forwards the event over a same-user named pipe / Unix socket
 //! (`pipe.rs`) to the running app: Island live sessions, approval / question cards (click or a
-//! spoken „tak” / „nie”), the terminal jump (`session_window.rs`) and the weekly recap.
+//! spoken „tak” / „nie”), the terminal jump (`session_window.rs`) and the weekly recap (`recap.rs`).
 //! `installer.rs` writes the hooks into each agent's config (diff preview, dated backup).
 
 pub mod installer;
 pub mod pipe;
+pub mod recap;
 pub mod relay;
 pub mod session_window;
 

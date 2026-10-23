@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { tr, type UiLang } from "../i18n";
 import { Button, Callout, Card, Row, Segmented, Slider, Toggle } from "./ui";
+import CodingAgentsCards from "./CodingAgents";
 
 /** Mirrors `agent::computer::config::AgentConfig` (Rust, store key `computerAgent`). */
 type AgentConfig = {
@@ -257,6 +258,7 @@ export default function AgentPage({ lang }: { lang: UiLang }) {
         )}
       </Card>
       {error && <Callout tone="danger">{error}</Callout>}
+      <CodingAgentsCards lang={lang} />
     </>
   );
 }

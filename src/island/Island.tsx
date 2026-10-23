@@ -41,6 +41,7 @@ import {
   type StepKind,
 } from "./codingAgents";
 import type { FileDiff } from "./diff";
+import { formatMinutes, summarize, weekStart, type History } from "./recap";
 import {
   creditsLabel,
   dominantPct,
@@ -2066,9 +2067,24 @@ function CodingQuestionCard({
 function AgentsPanel({ sessions }: { sessions: CodingSession[] }) {
   const lang = useAnim().cfg.uiLang;
   const [open, setOpen] = useState<{ diff: FileDiff; cwd: string } | null>(null);
+  const [week, setWeek] = useState<string | null>(null);
+  useEffect(() => {
+    const ws = weekStart(Date.now());
+    invoke<History | null>("coding_recap_history", { since: ws })
+      .then((h) => {
+        if (!h?.enabled) return;
+        const s = summarize(h, ws);
+        if (s.totalMinutes > 0)
+          setWeek(
+            `${tr(lang, "Ten tydzień", "This week")}: ${formatMinutes(s.totalMinutes)} · ${s.filesChanged} ${tr(lang, "plików", "files")} · +${s.linesAdded} −${s.linesRemoved}`,
+          );
+      })
+      .catch(() => undefined);
+  }, [lang]);
   if (open) return <DiffView diff={open.diff} cwd={open.cwd} onBack={() => setOpen(null)} />;
   return (
     <div className="space-y-2">
+      {week && <div className="px-1 text-[11px] text-white/50">{week}</div>}
       {sessions.map((s) => {
         const a = AGENTS[s.agent];
         return (
