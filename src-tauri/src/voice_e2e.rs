@@ -879,9 +879,13 @@ fn setup_case(c: &Client, port: u16, baseline: &[String], setup: &Value) -> Resu
         }
     }
     let calc = setup["foreground"] == "calc" && !process_running("CalculatorApp.exe");
-    if setup["foreground"] == "calc" {
-        crate::platform::open_path_for_tests("calc.exe")?;
-        std::thread::sleep(Duration::from_millis(2000));
+    // Windows only: `open_path_for_tests` doesn't exist elsewhere (the calc case is a Windows case).
+    #[cfg(windows)]
+    {
+        if setup["foreground"] == "calc" {
+            crate::platform::open_path_for_tests("calc.exe")?;
+            std::thread::sleep(Duration::from_millis(2000));
+        }
     }
     Ok(calc)
 }
