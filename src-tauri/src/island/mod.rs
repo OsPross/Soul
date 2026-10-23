@@ -293,6 +293,8 @@ struct IslandRuntime {
     mode: IslandMode,
     /// WebView zoom last set by `island_fit_zoom`.
     zoom: f64,
+    /// App that had the foreground before an Island text field took the keyboard.
+    focus_return: Option<u64>,
     assistant: Option<AssistantBanner>,
     activity: Option<Activity>,
     last_w: f64,
@@ -310,6 +312,7 @@ fn runtime() -> &'static Mutex<IslandRuntime> {
         Mutex::new(IslandRuntime {
             mode: IslandMode::Collapsed,
             zoom: 1.0,
+            focus_return: None,
             assistant: None,
             activity: None,
             last_w: 0.0,
@@ -716,6 +719,7 @@ fn spawn_cursor_poll(app: AppHandle, gate: &'static PollGate) {
                 };
                 let x = (cx - pos.x) as f64 / scale;
                 let y = (cy - pos.y) as f64 / scale;
+                ensure_tool_window(&win);
                 let on_island = gate.rect.lock().hit(x, y);
                 let want = u8::from(!on_island);
                 if !gate.held.load(Ordering::Relaxed) && gate.ignoring.load(Ordering::Relaxed) != want {
@@ -745,6 +749,25 @@ fn spawn_cursor_poll(app: AppHandle, gate: &'static PollGate) {
             }
         })
         .ok();
+}
+
+/// tao rebuilds GWL_EXSTYLE from its own flags on every click-through toggle and drops
+/// WS_EX_TOOLWINDOW (it has no flag for it): put it back, so the Island stays out of Alt+Tab.
+#[cfg(windows)]
+fn ensure_tool_window(win: &tauri::WebviewWindow) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    };
+    let Ok(hwnd) = win.hwnd() else { return };
+    let hwnd = HWND(hwnd.0);
+    // SAFETY: user32 validates the handle; only the tool-window bit is added.
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if ex & WS_EX_TOOLWINDOW.0 as isize == 0 {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW.0 as isize);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -950,11 +973,24 @@ pub fn island_set_rect(x: f64, y: f64, width: f64, height: f64) {
 /// A text field in the Island wants the keyboard (true) or is done with it (false).
 #[tauri::command]
 pub fn island_focus_window(app: AppHandle, focused: bool) {
-    if let Some(win) = app.get_webview_window(ISLAND_LABEL) {
-        set_activating(&win, focused);
-        if focused {
-            let _ = win.set_focus();
+    let Some(win) = app.get_webview_window(ISLAND_LABEL) else {
+        return;
+    };
+    let platform = &app.state::<AppState>().platform;
+    let own = crate::platform::native_window_id(&win);
+    if focused {
+        if let Some(prev) = platform.active_window().filter(|id| Some(*id) != own) {
+            runtime().lock().focus_return = Some(prev);
         }
+        set_activating(&win, true);
+        let _ = win.set_focus();
+        return;
+    }
+    set_activating(&win, false);
+    let prev = runtime().lock().focus_return.take();
+    // Only while the Island still holds the foreground: a click into another app already moved it.
+    if let Some(prev) = prev.filter(|_| own.is_some() && platform.active_window() == own) {
+        let _ = platform.activate_window(prev);
     }
 }
 

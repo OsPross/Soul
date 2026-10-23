@@ -242,7 +242,8 @@ shortcut handler ignores *Pressed* while Right Alt (`VK_RMENU`) is down (never R
 
 State machine lives in the frontend only: `island/useIslandMode.ts` (collapsed | peek | expanded). Rust (`island/mod.rs`)
 on Windows keeps a fixed non-activating `PANEL_W × PANEL_H` canvas (`WS_EX_NOACTIVATE`, kept via tao's
-`set_focusable` — tao rewrites the ex style on every click-through toggle; `island_focus_window` for text inputs) and
+`set_focusable` — tao rewrites the ex style on every click-through toggle, the poll re-adds `WS_EX_TOOLWINDOW`;
+`island_focus_window` for text inputs, hands the foreground back to the previous app on blur if the Island still has it) and
 a 16 ms `spawn_cursor_poll` (`PollGate`, parked while disabled) hit-tests `IslandRect` (`island_set_mode` / `island_set_rect`)
 for click-through, outside click / leave → `island://force-collapse`, then native hard collapse; `island_fit_zoom` fixes
 WebView2 DPI. Elsewhere Rust resizes on `island_set_mode` with a 100 ms leave poll.
