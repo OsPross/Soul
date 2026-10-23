@@ -89,3 +89,18 @@ test("a file dragged over the Island shows the drop zone, a dropped file its car
   assert.equal(mustCollapseFor("file", "peek"), true);
   assert.equal(mustCollapseFor("file", "collapsed"), false);
 });
+
+test("a coding agent approval / question comes right after Soul's own confirm and question", () => {
+  const busy: StageInput = { ...quiet, state: "thinking", textResult: true, agent: true, mediaActive: true, droppedFile: true };
+  assert.equal(pickStage({ ...busy, codingApproval: true }), "codingApproval");
+  assert.equal(pickStage({ ...busy, codingQuestion: true }), "codingQuestion");
+  assert.equal(pickStage({ ...busy, state: "confirm", codingApproval: true }), "confirm");
+  assert.equal(pickStage({ ...busy, state: "question", codingQuestion: true }), "question");
+  assert.equal(pickStage({ ...quiet, codingApproval: true, fileDragOver: true }), "codingApproval");
+  for (const s of ["codingApproval", "codingQuestion"] as const) {
+    assert.equal(holdsCard(s, false), true);
+    assert.equal(mustCollapseFor(s, "expanded"), true);
+    assert.equal(mustCollapseFor(s, "peek"), true);
+    assert.equal(mustCollapseFor(s, "collapsed"), false);
+  }
+});

@@ -1,5 +1,6 @@
 /**
- * Collapsed-mode content. Priority: confirm / agent question > file drag-over > dropped file >
+ * Collapsed-mode content. Priority: confirm / agent question > coding agent approval / question >
+ * file drag-over > dropped file >
  * text result > running agent task >
  * timer toast > live activity >
  * toast > update notice > caption > music > idle. A pending confirmation always wins and holds
@@ -9,7 +10,7 @@
  *
  * Pure (no imports) so `tests/ui/stage.test.ts` can run it under plain Node.
  */
-export type Stage = "confirm" | "question" | "drop" | "file" | "agent" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
+export type Stage = "confirm" | "question" | "codingApproval" | "codingQuestion" | "drop" | "file" | "agent" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
 
 export interface StageInput {
   /** Assistant banner state currently shown (`idle`, `listening`, `confirm`, `done`, …). */
@@ -28,11 +29,17 @@ export interface StageInput {
   fileDragOver?: boolean;
   /** A dropped file waits for a question. */
   droppedFile?: boolean;
+  /** A coding agent (Claude Code, Codex…) waits for a permission on the Island. */
+  codingApproval?: boolean;
+  /** Claude Code's `AskUserQuestion` waits on the Island. */
+  codingQuestion?: boolean;
 }
 
 export function pickStage(i: StageInput): Stage {
   if (i.state === "confirm") return "confirm";
   if (i.state === "question") return "question";
+  if (i.codingQuestion) return "codingQuestion";
+  if (i.codingApproval) return "codingApproval";
   if (i.fileDragOver) return "drop";
   if (i.droppedFile) return "file";
   if (i.textResult) return "result";
@@ -54,6 +61,8 @@ export function holdsCard(stage: Stage, toastHasAction: boolean): boolean {
   return (
     stage === "confirm" ||
     stage === "question" ||
+    stage === "codingApproval" ||
+    stage === "codingQuestion" ||
     stage === "drop" ||
     stage === "file" ||
     stage === "agent" ||
@@ -65,7 +74,13 @@ export function holdsCard(stage: Stage, toastHasAction: boolean): boolean {
 /** A confirmation arriving while the Island is open (peek / expanded) collapses it onto the card. */
 export function mustCollapseFor(stage: Stage, mode: "collapsed" | "peek" | "expanded"): boolean {
   return (
-    (stage === "confirm" || stage === "question" || stage === "drop" || stage === "file" || stage === "agent") &&
+    (stage === "confirm" ||
+      stage === "question" ||
+      stage === "codingApproval" ||
+      stage === "codingQuestion" ||
+      stage === "drop" ||
+      stage === "file" ||
+      stage === "agent") &&
     mode !== "collapsed"
   );
 }

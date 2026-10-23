@@ -11,6 +11,11 @@ changelog shown in Settings → O aplikacji / About.
 - **Agenci kodujący na wyspie (Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI).** Soul can
   install `soul --agent-hook` hooks into each agent's config (diff preview, dated backup, your other
   hooks and status line untouched). The hook never blocks the agent: without Soul it exits at once.
+  Permission prompts from Claude Code / Codex / Copilot show on the Island: click Zezwól / Odrzuć or
+  hold the talk key and say „tak” / „nie”; „W terminalu” hands the prompt back. Claude Code's
+  questions get option chips. The Island shows what the agent is doing („Claude · Edytuje · mod.rs
+  +12 −4”), and the new **Agenci** tab lists sessions with ↗ (jump to the terminal) and a Live Diff
+  of every edited file.
 - **Limity planów Claude Code i Codex (Settings → Wyspa → Limity planów).** Pills in the expanded
   Island header („● Claude 73%”, „● Codex 18%”) open a card with the 5-hour and weekly bars, reset
   times and Codex free resets. Claude Code reports limits only to its status line, so Soul offers a

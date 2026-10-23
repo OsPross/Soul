@@ -22,9 +22,25 @@ import {
   type PlanItem,
 } from "./panels";
 import { playCue, type Cue } from "./sounds";
-import { tr } from "../i18n";
+import { tr, type UiLang } from "../i18n";
 import { hasPendingUpdate, installUpdate, useUpdate, type UpdateStatus } from "../lib/update";
 import { holdsCard, mustCollapseFor, pickStage, type Stage } from "./stage";
+import {
+  AGENTS,
+  applyDecided,
+  applyHook,
+  diffStat,
+  emptyCoding,
+  liveSession,
+  relativeTo,
+  type Approval,
+  type CodingSession,
+  type CodingState,
+  type SessionState,
+  type Step,
+  type StepKind,
+} from "./codingAgents";
+import type { FileDiff } from "./diff";
 import {
   creditsLabel,
   dominantPct,
@@ -151,7 +167,7 @@ interface ToolChip {
   phase: "start" | "ok" | "error";
 }
 
-type Tab = "now" | "clipboard" | "plans" | "apps" | "settings";
+type Tab = "now" | "clipboard" | "plans" | "apps" | "agents" | "settings";
 
 const SIZE = {
   idle: { w: 236, h: 40, r: 20 },
@@ -161,6 +177,8 @@ const SIZE = {
   stageLong: { w: 460, h: 118, r: 28 },
   confirm: { w: 400, h: 140, r: 28 },
   question: { w: 420, h: 124, r: 28 },
+  codingApproval: { w: 480, h: 148, r: 28 },
+  codingQuestion: { w: 500, h: 210, r: 28 },
   agent: { w: 440, h: 92, r: 28 },
   result: { w: 540, h: 230, r: 28 },
   drop: { w: 420, h: 96, r: 28 },
@@ -245,6 +263,12 @@ export default function Island() {
   const [textResult, setTextResult] = useState<TextResult | null>(null);
   const [fileDragOver, setFileDragOver] = useState(false);
   const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
+  const [coding, setCodingState] = useState<CodingState>(emptyCoding);
+  const codingRef = useRef(coding);
+  const setCoding = useCallback((next: CodingState) => {
+    codingRef.current = next;
+    setCodingState(next);
+  }, []);
   const dragDepth = useRef(0);
   /** Conversation context alive until this wall-clock time (ms), for the subtle dot. */
   const [contextUntil, setContextUntil] = useState<number | null>(null);
@@ -423,6 +447,16 @@ export default function Island() {
       setContextUntil(c.active && c.expiresAtMs > Date.now() ? c.expiresAtMs : null),
     );
     on<WakeMicState>("soul://wake", setWake);
+    on<Record<string, unknown>>("island://coding-hook", (p) => {
+      const r = applyHook(codingRef.current, p, Date.now());
+      setCoding(r.state);
+      for (const e of r.effects) {
+        // The ack must reach Rust within 800 ms, or the agent's terminal asks instead.
+        invoke(e.type === "ack" ? "coding_agent_ack" : "coding_agent_decline", { requestId: e.requestId }).catch(() => undefined);
+        if (e.type === "ack") cue("notify");
+      }
+    });
+    on<{ requestId: string }>("island://coding-decided", (d) => setCoding(applyDecided(codingRef.current, d.requestId)));
     on<DroppedFile>("island://file-drop", (f) => {
       setFileDragOver(false);
       setDroppedFile(f);
@@ -457,7 +491,26 @@ export default function Island() {
       window.clearInterval(tick);
       unsubs.forEach((u) => u());
     };
-  }, [applyNowPlaying, collapse, cue]);
+  }, [applyNowPlaying, collapse, cue, setCoding]);
+
+  // An unanswered card goes back to the terminal (Rust gives up at 108 s anyway).
+  const approval = coding.approval;
+  useEffect(() => {
+    if (!approval) return;
+    const id = window.setTimeout(() => {
+      invoke("coding_agent_decline", { requestId: approval.requestId }).catch(() => undefined);
+      setCoding(applyDecided(codingRef.current, approval.requestId));
+    }, Math.max(0, approval.expiresAt - Date.now()));
+    return () => window.clearTimeout(id);
+  }, [approval, setCoding]);
+  const onCodingAnswer = useCallback(
+    (command: string, args: Record<string, unknown>) => {
+      if (!approval) return;
+      invoke(command, { requestId: approval.requestId, ...args }).catch(() => undefined);
+      setCoding(applyDecided(codingRef.current, approval.requestId));
+    },
+    [approval, setCoding],
+  );
 
   // ---------- derived state ----------
   const mediaActive = np.available && Boolean(np.title);
@@ -481,7 +534,10 @@ export default function Island() {
     agent: agentRun !== null,
     fileDragOver,
     droppedFile: droppedFile !== null,
+    codingApproval: approval !== null && !approval.questions,
+    codingQuestion: Boolean(approval?.questions),
   });
+  const codingLive = liveSession(coding);
   const nextTimer = timers[0] ?? null;
 
   // While the file card is up, the Smart talk key asks about that file.
@@ -570,6 +626,7 @@ export default function Island() {
     Boolean(toast) ||
     Boolean(textResult) ||
     Boolean(droppedFile) ||
+    Boolean(approval) ||
     fileDragOver ||
     Boolean(updateNotice);
   useEffect(() => {
@@ -663,10 +720,11 @@ export default function Island() {
           { id: "clipboard" as const, label: t("tab.clipboard"), show: sections.clipboard },
           { id: "plans" as const, label: t("tab.plans"), show: sections.plans },
           { id: "apps" as const, label: t("tab.apps"), show: sections.quickApps },
+          { id: "agents" as const, label: tr(cfg.uiLang, "Agenci", "Agents"), show: coding.sessions.length > 0 },
           { id: "settings" as const, label: t("tab.settings"), show: sections.quickSettings },
         ] satisfies { id: Tab; label: string; show: boolean }[]
       ).filter((x) => x.show),
-    [sections, t],
+    [sections, t, cfg.uiLang, coding.sessions.length],
   );
 
   const morph = anim.on("morph") && anim.level !== "off";
@@ -801,6 +859,7 @@ export default function Island() {
                     />
                   )}
                   {!planOpen && tab === "apps" && <AppsPanel pinned={pinned} setPinned={setPinned} />}
+                  {!planOpen && tab === "agents" && <AgentsPanel sessions={coding.sessions} />}
                   {!planOpen && tab === "settings" && <QuickSettingsPanel />}
                 </Expanded>
               ) : mode === "peek" ? (
@@ -847,6 +906,10 @@ export default function Island() {
                   onInstallUpdate={onInstallUpdate}
                   onUpdateClose={() => setUpdateNotice(null)}
                   agentRun={agentRun}
+                  approval={approval}
+                  approvalSession={coding.sessions.find((x) => x.key === approval?.sessionKey) ?? null}
+                  onCodingAnswer={onCodingAnswer}
+                  codingLive={codingLive}
                 />
               )}
             </motion.div>
@@ -987,7 +1050,15 @@ function Collapsed({
   agentRun,
   droppedFile,
   onFileClose,
+  approval,
+  approvalSession,
+  onCodingAnswer,
+  codingLive,
 }: {
+  approval: Approval | null;
+  approvalSession: CodingSession | null;
+  onCodingAnswer: (command: string, args: Record<string, unknown>) => void;
+  codingLive: CodingSession | null;
   agentRun: AgentProgress | null;
   droppedFile: DroppedFile | null;
   onFileClose: () => void;
@@ -1068,6 +1139,16 @@ function Collapsed({
           </Press>
         </div>
       </div>
+    );
+  }
+
+  if ((stage === "codingApproval" || stage === "codingQuestion") && approval) {
+    const focus = () =>
+      invoke("coding_agent_focus_terminal", { sessionId: approvalSession?.sessionId || null, cwd: approvalSession?.cwd || null }).catch(() => undefined);
+    return stage === "codingQuestion" ? (
+      <CodingQuestionCard approval={approval} onAnswer={onCodingAnswer} onFocus={focus} />
+    ) : (
+      <CodingApprovalCard approval={approval} spirit={spirit(28)} spiritLayout={spiritLayout} onAnswer={onCodingAnswer} onFocus={focus} />
     );
   }
 
@@ -1214,7 +1295,9 @@ function Collapsed({
   return (
     <div className="flex h-full items-center gap-2 px-2.5">
       <SpiritSlot layoutId={spiritLayout}>{spirit(18)}</SpiritSlot>
-      {timer ? (
+      {codingLive && !timer ? (
+        <CodingPill session={codingLive} />
+      ) : timer ? (
         <span className="flex min-w-0 flex-1 items-center justify-center gap-1.5 text-[12px] font-medium tabular-nums text-white/85">
           <span style={{ color: tokens.accentDictation }}>⏱ {countdown(timer.endsAtMs - nowMs)}</span>
           {timer.label && <span className="truncate text-white/55">{timer.label}</span>}
@@ -1788,6 +1871,301 @@ function AgentCard({
           animate={{ width: `${pct}%` }}
           transition={{ duration: anim.dur(260) }}
         />
+      </div>
+    </div>
+  );
+}
+
+// ---------- coding agents (Claude Code, Codex…) ----------
+
+const STEP_VERBS: Record<StepKind, [string, string]> = {
+  read: ["Czyta", "Reads"],
+  edit: ["Edytuje", "Edits"],
+  write: ["Tworzy", "Writes"],
+  run: ["Uruchamia", "Runs"],
+  search: ["Szuka", "Searches"],
+  web: ["Sieć", "Web"],
+  other: ["", ""],
+};
+
+const SESSION_STATES: Record<SessionState, [string, string]> = {
+  idle: ["Bezczynny", "Idle"],
+  working: ["Pracuje", "Working"],
+  thinking: ["Myśli", "Thinking"],
+  approval: ["Czeka na zgodę", "Needs approval"],
+  question: ["Pyta", "Asking"],
+  finished: ["Gotowe", "Done"],
+  error: ["Błąd", "Error"],
+  ratelimit: ["Limit", "Rate limit"],
+};
+
+function stepLabel(step: Step, lang: UiLang): string {
+  const [pl, en] = STEP_VERBS[step.kind];
+  const verb = step.kind === "other" ? step.tool : tr(lang, pl, en);
+  return step.target ? `${verb} · ${step.target}` : verb;
+}
+
+/** Collapsed idle pill while an agent works: „● Claude · Edytuje · mod.rs +12 −4”. */
+function CodingPill({ session }: { session: CodingSession }) {
+  const lang = useAnim().cfg.uiLang;
+  const a = AGENTS[session.agent];
+  const step = session.steps[session.steps.length - 1];
+  const text = step ? stepLabel(step, lang) : tr(lang, ...SESSION_STATES[session.state]);
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11.5px] font-medium text-white/80">
+      <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full" style={{ background: a.color }} />
+      <span className="shrink-0" style={{ color: a.color }}>
+        {a.name.split(" ")[0]}
+      </span>
+      <span className="truncate">{text}</span>
+      {step?.diff && <span className="shrink-0 tabular-nums text-white/50">{diffStat(step.diff)}</span>}
+    </span>
+  );
+}
+
+function AgentBadge({ approval }: { approval: Approval }) {
+  const a = AGENTS[approval.agent];
+  return (
+    <div className="flex min-w-0 items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-wider" style={{ color: a.color }}>
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: a.color }} />
+      <span className="shrink-0">{a.name}</span>
+      {approval.project && <span className="truncate normal-case tracking-normal text-white/45">· {approval.project}</span>}
+    </div>
+  );
+}
+
+function CodingApprovalCard({
+  approval,
+  spirit,
+  spiritLayout,
+  onAnswer,
+  onFocus,
+}: {
+  approval: Approval;
+  spirit: React.ReactNode;
+  spiritLayout?: string;
+  onAnswer: (command: string, args: Record<string, unknown>) => void;
+  onFocus: () => void;
+}) {
+  const lang = useAnim().cfg.uiLang;
+  return (
+    <div className="flex h-full flex-col justify-between px-4 pb-3.5 pt-3" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-3">
+        <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
+        <div className="min-w-0 flex-1">
+          <AgentBadge approval={approval} />
+          <div className="truncate text-[13px] font-semibold">
+            {approval.tool}
+            {approval.target && <span className="font-mono text-[12px] font-normal text-white/80"> · {approval.target}</span>}
+          </div>
+          <div className="truncate text-[11px] text-[var(--soul-muted)]">
+            {tr(lang, "Kliknij lub powiedz „tak” / „nie”", "Click or say “yes” / “no”")}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Press onClick={() => onAnswer("coding_agent_decline", {})} className="soul-btn-ghost rounded-full px-3 py-1.5 text-[12px]">
+          {tr(lang, "W terminalu", "Terminal")}
+        </Press>
+        <Press onClick={onFocus} label={tr(lang, "Otwórz terminal", "Open terminal")} className="soul-btn-ghost rounded-full px-3 py-1.5 text-[12px]">
+          ↗
+        </Press>
+        <span className="flex-1" />
+        <Press onClick={() => onAnswer("coding_agent_decide", { decision: "deny" })} className="soul-btn-ghost rounded-full px-4 py-1.5 text-[12px]">
+          {tr(lang, "Odrzuć", "Deny")}
+        </Press>
+        <Press
+          onClick={() => onAnswer("coding_agent_decide", { decision: "allow" })}
+          className="rounded-full px-4 py-1.5 text-[12px] font-semibold text-[#08130c]"
+          style={{ background: tokens.success }}
+        >
+          {tr(lang, "Zezwól", "Allow")}
+        </Press>
+      </div>
+    </div>
+  );
+}
+
+function CodingQuestionCard({
+  approval,
+  onAnswer,
+  onFocus,
+}: {
+  approval: Approval;
+  onAnswer: (command: string, args: Record<string, unknown>) => void;
+  onFocus: () => void;
+}) {
+  const lang = useAnim().cfg.uiLang;
+  const questions = approval.questions ?? [];
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const toggle = (q: string, label: string, multi: boolean) =>
+    setPicked((p) => {
+      const cur = p[q] ?? [];
+      const next = multi ? (cur.includes(label) ? cur.filter((x) => x !== label) : [...cur, label]) : [label];
+      return { ...p, [q]: next };
+    });
+  const complete = questions.every((q) => (picked[q.question] ?? []).length > 0);
+  const submit = () => {
+    // Labels in option order, joined like Claude Code's own multi-select answer.
+    const answers = Object.fromEntries(
+      questions.map((q) => [q.question, q.options.map((o) => o.label).filter((l) => picked[q.question]?.includes(l)).join(", ")]),
+    );
+    onAnswer("coding_agent_answer_question", { answers });
+  };
+  return (
+    <div className="flex h-full flex-col gap-2 px-4 pb-3 pt-3" onClick={(e) => e.stopPropagation()}>
+      <AgentBadge approval={approval} />
+      <div className="soul-scroll min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+        {questions.map((q) => (
+          <div key={q.question}>
+            <div className="mb-1 text-[12.5px] font-semibold leading-snug">
+              {q.header && <span className="mr-1.5 text-white/45">{q.header}</span>}
+              {q.question}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {q.options.map((o) => {
+                const on = picked[q.question]?.includes(o.label) ?? false;
+                return (
+                  <Press
+                    key={o.label}
+                    label={o.description}
+                    onClick={() => toggle(q.question, o.label, q.multiSelect)}
+                    className={`rounded-full border px-3 py-1 text-[11.5px] ${on ? "border-white/40 bg-white/15 text-white" : "border-white/10 text-white/70"}`}
+                  >
+                    {q.multiSelect ? (on ? "☑ " : "☐ ") : ""}
+                    {o.label}
+                  </Press>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Press onClick={() => onAnswer("coding_agent_decline", {})} className="soul-btn-ghost rounded-full px-3 py-1.5 text-[12px]">
+          {tr(lang, "W terminalu", "Terminal")}
+        </Press>
+        <Press onClick={onFocus} label={tr(lang, "Otwórz terminal", "Open terminal")} className="soul-btn-ghost rounded-full px-3 py-1.5 text-[12px]">
+          ↗
+        </Press>
+        <span className="flex-1" />
+        <Press
+          onClick={submit}
+          disabled={!complete}
+          className="rounded-full px-4 py-1.5 text-[12px] font-semibold text-[#08130c] disabled:opacity-40"
+          style={{ background: tokens.success }}
+        >
+          {tr(lang, "Wyślij", "Submit")}
+        </Press>
+      </div>
+    </div>
+  );
+}
+
+/** Expanded „Agenci” tab: sessions, live step ticker, ↗ terminal, Live Diff on an edit step. */
+function AgentsPanel({ sessions }: { sessions: CodingSession[] }) {
+  const lang = useAnim().cfg.uiLang;
+  const [open, setOpen] = useState<{ diff: FileDiff; cwd: string } | null>(null);
+  if (open) return <DiffView diff={open.diff} cwd={open.cwd} onBack={() => setOpen(null)} />;
+  return (
+    <div className="space-y-2">
+      {sessions.map((s) => {
+        const a = AGENTS[s.agent];
+        return (
+          <div key={s.key} className="rounded-xl bg-white/5 px-3 py-2">
+            <div className="flex items-center gap-2 text-[12px]">
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: a.color }} />
+              <span className="shrink-0 font-semibold" style={{ color: a.color }}>
+                {a.name}
+              </span>
+              <span className="min-w-0 truncate text-white/55">{s.project && `· ${s.project}`}</span>
+              <span className="ml-auto shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10.5px] text-white/70">
+                {tr(lang, ...SESSION_STATES[s.state])}
+              </span>
+              <Press
+                label={tr(lang, "Otwórz terminal", "Open terminal")}
+                onClick={() => invoke("coding_agent_focus_terminal", { sessionId: s.sessionId || null, cwd: s.cwd || null }).catch(() => undefined)}
+                className="soul-btn-ghost shrink-0 rounded-full px-2 py-0.5 text-[11px]"
+              >
+                ↗
+              </Press>
+            </div>
+            {s.steps.slice(-4).map((step) => {
+              const diff = step.diff;
+              return (
+                <div key={step.id} className="mt-0.5 flex items-center gap-1.5 pl-3.5 text-[11.5px] text-white/70">
+                  {diff ? (
+                    <button
+                      type="button"
+                      onClick={() => setOpen({ diff, cwd: s.cwd })}
+                      className="min-w-0 truncate text-left underline decoration-white/25 underline-offset-2 hover:text-white"
+                    >
+                      {stepLabel(step, lang)}{" "}
+                      <span className="tabular-nums" style={{ color: tokens.success }}>
+                        +{diff.added}
+                      </span>{" "}
+                      <span className="tabular-nums" style={{ color: tokens.danger }}>
+                        −{diff.removed}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate" style={step.failed ? { color: tokens.danger } : undefined}>
+                      {stepLabel(step, lang)}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+            {s.finalLine && s.state === "finished" && <div className="mt-1 line-clamp-2 pl-3.5 text-[11.5px] text-white/85">{s.finalLine}</div>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DiffView({ diff, cwd, onBack }: { diff: FileDiff; cwd: string; onBack: () => void }) {
+  const lang = useAnim().cfg.uiLang;
+  const sign = { added: "+", removed: "−", context: " " } as const;
+  const color = { added: tokens.success, removed: tokens.danger, context: undefined } as const;
+  const bg = { added: "rgb(52 211 153 / 0.12)", removed: "rgb(248 113 113 / 0.12)", context: undefined } as const;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 text-[12px]">
+        <Press onClick={onBack} label={tr(lang, "Wstecz", "Back")} className="soul-btn-ghost rounded-full px-2.5 py-0.5">
+          ‹
+        </Press>
+        <span className="min-w-0 truncate font-mono text-white/85">{relativeTo(diff.path, cwd)}</span>
+        <span className="shrink-0 tabular-nums" style={{ color: tokens.success }}>
+          +{diff.added}
+        </span>
+        <span className="shrink-0 tabular-nums" style={{ color: tokens.danger }}>
+          −{diff.removed}
+        </span>
+        <span className="flex-1" />
+        <Press
+          label={tr(lang, "Otwórz plik", "Open file")}
+          onClick={() => invoke("coding_agent_open_file", { path: diff.path }).catch(() => undefined)}
+          className="soul-btn-ghost rounded-full px-2.5 py-0.5"
+        >
+          ↗
+        </Press>
+      </div>
+      {diff.tooBig && <div className="text-[11.5px] text-white/55">{tr(lang, "Zmiana jest za duża na podgląd.", "The change is too big to preview.")}</div>}
+      <div className="font-mono text-[11px] leading-[1.45]">
+        {diff.hunks.map((h, hi) => (
+          <div key={hi} className="mb-1.5 overflow-x-auto rounded-md bg-black/25">
+            {h.lines.map((l, li) => (
+              <div key={li} className="flex gap-2 whitespace-pre px-1.5" style={{ background: bg[l.kind] }}>
+                <span className="w-8 shrink-0 select-none text-right text-white/30">{l.newNo ?? l.oldNo}</span>
+                <span className="w-2 shrink-0 select-none" style={{ color: color[l.kind] }}>
+                  {sign[l.kind]}
+                </span>
+                <span className="text-white/85">{l.text}</span>
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   );
