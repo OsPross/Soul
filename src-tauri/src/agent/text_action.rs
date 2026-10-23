@@ -277,7 +277,7 @@ fn run_inner(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction)
         t0.elapsed().as_millis(),
         out.chars().count()
     );
-    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    let id = next_result_id();
     if action.replaces() {
         if let Some(w) = window {
             let _ = platform.activate_window(w);
@@ -300,22 +300,27 @@ fn run_inner(app: &AppHandle, platform: &Arc<dyn Platform>, action: &TextAction)
         );
         Ok(format!("{} — wklejono w miejsce zaznaczenia.", action.label()))
     } else {
-        *LAST_INFO.lock() = Some(Info {
-            id,
-            text: out.clone(),
-            window,
-        });
-        let _ = app.emit_to(
-            tauri::EventTarget::webview_window("island"),
-            "island://text-result",
-            TextResultPayload {
-                id,
-                title: action.label(),
-                text: out,
-            },
-        );
+        show_result(app, id, action.label(), out, window);
         Ok(format!("{} — wynik na wyspie.", action.label()))
     }
+}
+
+/// Island result card with „Kopiuj” / „Wklej” (also used for answers about a dropped file).
+pub fn show_result(app: &AppHandle, id: u64, title: String, text: String, window: Option<u64>) {
+    *LAST_INFO.lock() = Some(Info {
+        id,
+        text: text.clone(),
+        window,
+    });
+    let _ = app.emit_to(
+        tauri::EventTarget::webview_window("island"),
+        "island://text-result",
+        TextResultPayload { id, title, text },
+    );
+}
+
+pub fn next_result_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::SeqCst)
 }
 
 fn platform_of(app: &AppHandle) -> Arc<dyn Platform> {

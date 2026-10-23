@@ -13,6 +13,7 @@
 
 pub(crate) mod clipboard;
 pub mod debug_log;
+pub mod drop;
 mod media;
 mod watchdog;
 
@@ -328,6 +329,7 @@ fn runtime() -> &'static Mutex<IslandRuntime> {
 pub fn init(app: &AppHandle) {
     clipboard::start_watcher(app.clone());
     media::start_worker(app.clone());
+    drop::install(app);
     #[cfg(windows)]
     spawn_cursor_poll(app.clone(), gate());
     #[cfg(not(windows))]
@@ -720,17 +722,20 @@ fn spawn_cursor_poll(app: AppHandle, gate: &'static PollGate) {
                 let x = (cx - pos.x) as f64 / scale;
                 let y = (cy - pos.y) as f64 / scale;
                 ensure_tool_window(&win);
-                let on_island = gate.rect.lock().hit(x, y);
-                let want = u8::from(!on_island);
+                let down = left_button_down();
+                // A drag (e.g. a file from Explorer) over the window: WS_EX_TRANSPARENT hides it from
+                // OLE's WindowFromPoint, so accept input on the whole canvas while the button is held.
+                let dragging = down && (0.0..=PANEL_W).contains(&x) && (0.0..=PANEL_H).contains(&y);
+                let accept = gate.rect.lock().hit(x, y) || dragging;
+                let want = u8::from(!accept);
                 if !gate.held.load(Ordering::Relaxed) && gate.ignoring.load(Ordering::Relaxed) != want {
                     gate.ignoring.store(want, Ordering::Relaxed);
-                    let _ = win.set_ignore_cursor_events(!on_island);
+                    let _ = win.set_ignore_cursor_events(!accept);
                 }
 
-                let down = left_button_down();
                 let clicked = down && !was_down;
                 was_down = down;
-                if on_island || runtime().lock().mode == IslandMode::Collapsed {
+                if accept || runtime().lock().mode == IslandMode::Collapsed {
                     outside_since = None;
                     asked_at = None;
                     continue;

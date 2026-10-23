@@ -75,3 +75,17 @@ test("a running agent task shows its card; its confirmation and question win ove
   // Task over → the usual result stage.
   assert.equal(pickStage({ ...running, agent: false, state: "done" }), "stage");
 });
+
+test("a file dragged over the Island shows the drop zone, a dropped file its card", () => {
+  const busy: StageInput = { ...quiet, state: "thinking", textResult: true, agent: true, mediaActive: true };
+  assert.equal(pickStage({ ...busy, fileDragOver: true }), "drop");
+  assert.equal(pickStage({ ...busy, droppedFile: true }), "file");
+  assert.equal(pickStage({ ...busy, fileDragOver: true, droppedFile: true }), "drop");
+  assert.equal(pickStage({ ...quiet, state: "confirm", fileDragOver: true }), "confirm");
+  assert.equal(pickStage({ ...quiet, state: "question", droppedFile: true }), "question");
+  assert.equal(holdsCard("drop", false), true);
+  assert.equal(holdsCard("file", false), true);
+  assert.equal(mustCollapseFor("drop", "expanded"), true);
+  assert.equal(mustCollapseFor("file", "peek"), true);
+  assert.equal(mustCollapseFor("file", "collapsed"), false);
+});

@@ -25,7 +25,8 @@
         "skipTaskbar": true,
         "visible": false,
         "focus": false,
-        "shadow": false
+        "shadow": false,
+        "dragDropEnabled": false
       },
       {
         "label": "overlay",

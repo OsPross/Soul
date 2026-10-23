@@ -8,6 +8,10 @@ changelog shown in Settings → O aplikacji / About.
 
 ### Added
 
+- **Upuść plik na wyspę.** Drag a file or screenshot (image, PDF, text, code, CSV, JSON, logs, up to
+  20 MB) from Explorer onto the Island, then ask about it by typing or by holding the talk key. The
+  answer shows on the Island with Kopiuj / Wklej. Dropped files are copied into Soul's own inbox and
+  removed after 7 days.
 - **Kula 3D (Settings → Wygląd → Styl duszy).** A WebGL particle orb as an alternative to the droplet
   spirit: a rippling sphere while listening / speaking, a knot while thinking, sonar rings for music
   and a drawn-in checkmark on success. Falls back to the droplet without WebGL.

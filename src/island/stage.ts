@@ -1,5 +1,6 @@
 /**
- * Collapsed-mode content. Priority: confirm / agent question > text result > running agent task >
+ * Collapsed-mode content. Priority: confirm / agent question > file drag-over > dropped file >
+ * text result > running agent task >
  * timer toast > live activity >
  * toast > update notice > caption > music > idle. A pending confirmation always wins and holds
  * the card: hover never turns it into peek and nothing expands it until it is answered.
@@ -8,7 +9,7 @@
  *
  * Pure (no imports) so `tests/ui/stage.test.ts` can run it under plain Node.
  */
-export type Stage = "confirm" | "question" | "agent" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
+export type Stage = "confirm" | "question" | "drop" | "file" | "agent" | "result" | "toast" | "stage" | "compact" | "update" | "caption" | "music" | "idle";
 
 export interface StageInput {
   /** Assistant banner state currently shown (`idle`, `listening`, `confirm`, `done`, …). */
@@ -23,11 +24,17 @@ export interface StageInput {
   mediaActive: boolean;
   /** A computer-agent task is running (`island://agent`, phase running). */
   agent?: boolean;
+  /** A file is being dragged over the Island. */
+  fileDragOver?: boolean;
+  /** A dropped file waits for a question. */
+  droppedFile?: boolean;
 }
 
 export function pickStage(i: StageInput): Stage {
   if (i.state === "confirm") return "confirm";
   if (i.state === "question") return "question";
+  if (i.fileDragOver) return "drop";
+  if (i.droppedFile) return "file";
   if (i.textResult) return "result";
   if (i.agent) return "agent";
   if (i.toastKind === "timer") return "toast";
@@ -47,6 +54,8 @@ export function holdsCard(stage: Stage, toastHasAction: boolean): boolean {
   return (
     stage === "confirm" ||
     stage === "question" ||
+    stage === "drop" ||
+    stage === "file" ||
     stage === "agent" ||
     stage === "result" ||
     (stage === "toast" && toastHasAction)
@@ -55,5 +64,8 @@ export function holdsCard(stage: Stage, toastHasAction: boolean): boolean {
 
 /** A confirmation arriving while the Island is open (peek / expanded) collapses it onto the card. */
 export function mustCollapseFor(stage: Stage, mode: "collapsed" | "peek" | "expanded"): boolean {
-  return (stage === "confirm" || stage === "question" || stage === "agent") && mode !== "collapsed";
+  return (
+    (stage === "confirm" || stage === "question" || stage === "drop" || stage === "file" || stage === "agent") &&
+    mode !== "collapsed"
+  );
 }

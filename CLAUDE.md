@@ -128,7 +128,13 @@ settings persistence goes through Rust (`tauri-plugin-store`), not directly.
   (autosave, tray) — `save_app_settings` keeps the stored values. Thresholds: `wake::thresholds(sensitivity)`, tuned
   with `wake_regression.rs` (rustpotter's own defaults fire on most speech; its VAD is off — it blocks real detections).
 - `island/` – `mod.rs` (window, positioning, assistant banner + `kind`, tool/caption events), `media.rs` (Windows SMTC / Linux MPRIS via zbus),
-  `clipboard.rs` (history; skips password-looking strings), `debug_log.rs` (`soul_debug!`), `watchdog.rs`.
+  `clipboard.rs` (history; skips password-looking strings), `debug_log.rs` (`soul_debug!`), `watchdog.rs`,
+  `drop.rs` (file drop: Windows = island window `dragDropEnabled: false` + WebView2 `postMessageWithAdditionalObjects`
+  → `ICoreWebView2File::Path`; Linux = Tauri `DragDrop`, so `tauri.linux.conf.json` repeats the whole `windows` array
+  with it on — keep both in sync. Only OS-delivered paths (`allow_dropped`/`take_dropped`) are copied into
+  `<app data>/inbox` (20 MB, swept after 7 days); `island_ask_file` / talk key while the card is up
+  (`active_file`, checked first in `route_smart_transcript`) → `gemini::build_file_ask_body` → `text_action::show_result`).
+  The Windows cursor poll accepts input on the whole canvas while the left button is held (OLE drop target).
 - `platform/` – OS abstraction (below).
 
 ### Platform trait (`platform/mod.rs`)

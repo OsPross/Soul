@@ -109,6 +109,15 @@ interface TextResult {
   title: string;
   text: string;
 }
+/** A file dropped on the Island and copied into Soul's inbox (`island://file-drop`). */
+interface DroppedFile {
+  name: string;
+  path: string;
+  size: number;
+  kind: "image" | "pdf" | "text";
+  previewDataUrl?: string | null;
+}
+
 /** An unread result card goes away on its own after this long. */
 const TEXT_RESULT_MS = 120_000;
 
@@ -140,6 +149,8 @@ const SIZE = {
   question: { w: 420, h: 124, r: 28 },
   agent: { w: 440, h: 92, r: 28 },
   result: { w: 540, h: 230, r: 28 },
+  drop: { w: 420, h: 96, r: 28 },
+  file: { w: 500, h: 148, r: 28 },
   toast: { w: 440, h: 76, r: 26 },
   update: { w: 420, h: 76, r: 26 },
   caption: { w: 440, h: 84, r: 28 },
@@ -218,6 +229,9 @@ export default function Island() {
   const [timers, setTimers] = useState<TimerItem[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
   const [textResult, setTextResult] = useState<TextResult | null>(null);
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const [droppedFile, setDroppedFile] = useState<DroppedFile | null>(null);
+  const dragDepth = useRef(0);
   /** Conversation context alive until this wall-clock time (ms), for the subtle dot. */
   const [contextUntil, setContextUntil] = useState<number | null>(null);
   const [wake, setWake] = useState<WakeMicState | null>(null);
@@ -386,6 +400,7 @@ export default function Island() {
     });
     on<{ cue: Cue }>("soul://sfx", (p) => cue(p.cue));
     on<TextResult>("island://text-result", (r) => {
+      setDroppedFile(null); // an answer about the dropped file replaces its card
       setTextResult(r);
       collapse(); // the card is a collapsed-mode stage
       cue("notify");
@@ -394,6 +409,15 @@ export default function Island() {
       setContextUntil(c.active && c.expiresAtMs > Date.now() ? c.expiresAtMs : null),
     );
     on<WakeMicState>("soul://wake", setWake);
+    on<DroppedFile>("island://file-drop", (f) => {
+      setFileDragOver(false);
+      setDroppedFile(f);
+      cue("notify");
+    });
+    // Linux: Tauri's own drop handler (the page gets no DOM drag events there).
+    on("tauri://drag-enter", () => setFileDragOver(true));
+    on("tauri://drag-leave", () => setFileDragOver(false));
+    on("tauri://drag-drop", () => setFileDragOver(false));
     on<{ name: string; label?: string | null; phase: ToolChip["phase"] }>("island://tool", (c) =>
       setTools((prev): ToolChip[] => {
         if (c.phase === "start")
@@ -441,8 +465,42 @@ export default function Island() {
     updateNotice: Boolean(updateNotice),
     mediaActive,
     agent: agentRun !== null,
+    fileDragOver,
+    droppedFile: droppedFile !== null,
   });
   const nextTimer = timers[0] ?? null;
+
+  // While the file card is up, the Smart talk key asks about that file.
+  useEffect(() => {
+    invoke("island_file_active", { path: droppedFile?.path ?? null }).catch(() => undefined);
+  }, [droppedFile?.path]);
+
+  // Windows: WebView2 takes the drop (`dragDropEnabled: false`) and hands the FileList to Rust.
+  const dragHandlers = {
+    onDragEnter: (e: React.DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      dragDepth.current += 1; // child elements fire their own enter / leave
+      setFileDragOver(true);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    onDragLeave: () => {
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setFileDragOver(false);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      dragDepth.current = 0;
+      setFileDragOver(false);
+      const wv = (window as unknown as { chrome?: { webview?: { postMessageWithAdditionalObjects?: (m: string, o: FileList) => void } } })
+        .chrome?.webview;
+      if (e.dataTransfer.files.length > 0) wv?.postMessageWithAdditionalObjects?.("soul-file-drop", e.dataTransfer.files);
+    },
+  };
   holdCard.current = holdsCard(stage, Boolean(toast?.action));
 
   // A confirmation has top priority: if the Island is open (peek over the player, expanded),
@@ -497,6 +555,8 @@ export default function Island() {
     timers.length > 0 ||
     Boolean(toast) ||
     Boolean(textResult) ||
+    Boolean(droppedFile) ||
+    fileDragOver ||
     Boolean(updateNotice);
   useEffect(() => {
     if (!cfg.perf.pauseWhenIdle || busy) {
@@ -609,6 +669,7 @@ export default function Island() {
 
   return (
     <div
+      {...dragHandlers}
       className="flex h-full w-full items-start bg-transparent"
       style={{
         justifyContent: align === "center" ? "center" : align === "start" ? "flex-start" : "flex-end",
@@ -716,6 +777,8 @@ export default function Island() {
                   onToastClose={() => setToast(null)}
                   textResult={textResult}
                   onResultClose={() => setTextResult(null)}
+                  droppedFile={droppedFile}
+                  onFileClose={() => setDroppedFile(null)}
                   contextActive={contextUntil !== null}
                   timer={nextTimer}
                   nowMs={nowMs}
@@ -862,8 +925,12 @@ function Collapsed({
   onInstallUpdate,
   onUpdateClose,
   agentRun,
+  droppedFile,
+  onFileClose,
 }: {
   agentRun: AgentProgress | null;
+  droppedFile: DroppedFile | null;
+  onFileClose: () => void;
   textResult: TextResult | null;
   onResultClose: () => void;
   contextActive: boolean;
@@ -941,6 +1008,16 @@ function Collapsed({
           </Press>
         </div>
       </div>
+    );
+  }
+
+  if (stage === "drop") {
+    return <DropZone spirit={spirit(28)} spiritLayout={spiritLayout} accent={accent} />;
+  }
+
+  if (stage === "file" && droppedFile) {
+    return (
+      <FileCard file={droppedFile} spirit={spirit(26)} spiritLayout={spiritLayout} accent={accent} busy={banner.state !== "idle"} onClose={onFileClose} />
     );
   }
 
@@ -1162,6 +1239,115 @@ function TextResultCard({
           style={{ background: accent }}
         >
           {t("island.paste")}
+        </Press>
+      </div>
+    </div>
+  );
+}
+
+function DropZone({ spirit, spiritLayout, accent }: { spirit: React.ReactNode; spiritLayout?: string; accent: string }) {
+  const lang = useAnim().cfg.uiLang;
+  return (
+    <div className="flex h-full items-center p-2.5">
+      <div
+        className="soul-drop-zone flex h-full w-full items-center gap-3 rounded-[20px] px-3"
+        style={{ ["--accent" as string]: accent }}
+      >
+        <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold">{tr(lang, "Upuść plik, aby zadać pytanie", "Drop a file to ask a question")}</div>
+          <div className="mt-1 flex gap-1.5">
+            {["PDF", tr(lang, "Obrazy", "Images"), tr(lang, "Kod", "Code"), tr(lang, "Tekst", "Text")].map((c) => (
+              <span key={c} className="rounded-full bg-white/10 px-2 py-0.5 text-[10.5px] text-white/75">
+                {c}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function fileSize(n: number): string {
+  return n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Dropped file: ask by typing (Enter / „Zapytaj”) or by holding the talk key. */
+function FileCard({
+  file,
+  spirit,
+  spiritLayout,
+  accent,
+  busy,
+  onClose,
+}: {
+  file: DroppedFile;
+  spirit: React.ReactNode;
+  spiritLayout?: string;
+  accent: string;
+  busy: boolean;
+  onClose: () => void;
+}) {
+  const lang = useAnim().cfg.uiLang;
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ask = () => {
+    const q = question.trim();
+    if (!q || asking) return;
+    setAsking(true);
+    setError(null);
+    // Success replaces this card with the answer (`island://text-result`).
+    invoke("island_ask_file", { path: file.path, question: q })
+      .catch((e) => setError(String(e)))
+      .finally(() => setAsking(false));
+  };
+  const working = asking || busy;
+  return (
+    <div className="flex h-full flex-col justify-between px-4 pb-3 pt-3" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-3">
+        {file.previewDataUrl ? (
+          <img src={file.previewDataUrl} alt="" className="h-9 w-9 shrink-0 rounded-lg object-cover" />
+        ) : (
+          <SpiritSlot layoutId={spiritLayout}>{spirit}</SpiritSlot>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] font-semibold tracking-tight">{file.name}</div>
+          <div className="truncate text-[11px] text-[var(--soul-muted)]">
+            {file.kind.toUpperCase()} · {fileSize(file.size)}
+            {error ? ` · ${error}` : ""}
+          </div>
+        </div>
+        <Press onClick={onClose} className="soul-btn-ghost shrink-0 rounded-full px-2 py-1 text-[11px]" aria-label={tr(lang, "Zamknij", "Close")}>
+          ✕
+        </Press>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={question}
+          disabled={working}
+          onChange={(e) => setQuestion(e.target.value)}
+          // The Island window is non-activating; typing needs it to take the keyboard.
+          onFocus={() => invoke("island_focus_window", { focused: true }).catch(() => undefined)}
+          onBlur={() => invoke("island_focus_window", { focused: false }).catch(() => undefined)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              ask();
+            }
+          }}
+          placeholder={
+            working ? tr(lang, "Myślę…", "Thinking…") : tr(lang, "Zapytaj o plik… (lub przytrzymaj klawisz mówienia)", "Ask about the file… (or hold the talk key)")
+          }
+          className="soul-input min-w-0 flex-1 px-3 py-1.5 text-[12px]"
+        />
+        <Press
+          onClick={ask}
+          className="shrink-0 rounded-full px-4 py-1.5 text-[12px] font-semibold text-[#0b0d0c]"
+          style={{ background: accent, opacity: working || !question.trim() ? 0.5 : 1 }}
+        >
+          {tr(lang, "Zapytaj", "Ask")}
         </Press>
       </div>
     </div>

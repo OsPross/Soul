@@ -869,6 +869,49 @@ no <text> tags, and no markdown code fences unless the input itself had them."
     })
 }
 
+/// Files Gemini reads natively (sent as `inline_data`); anything else must be UTF-8 text.
+pub fn file_mime(name: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
+/// Text files are cut to this many bytes before they go to the model.
+pub const MAX_FILE_TEXT: usize = 200 * 1024;
+
+/// Question about a file dropped on the Island (image / PDF inline, text in `<file>` tags).
+pub fn build_file_ask_body(name: &str, bytes: &[u8], question: &str, language: &str) -> Result<Value, String> {
+    let file_part = match file_mime(name) {
+        Some(mime) => serde_json::json!({ "inline_data": { "mime_type": mime, "data": BASE64.encode(bytes) } }),
+        None => {
+            let text = std::str::from_utf8(bytes).map_err(|_| "Ten typ pliku nie jest obsługiwany.".to_string())?;
+            let mut end = text.len().min(MAX_FILE_TEXT);
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            serde_json::json!({ "text": format!("<file name=\"{name}\">\n{}\n</file>", &text[..end]) })
+        }
+    };
+    let question = if question.trim().is_empty() { "Summarize this file." } else { question.trim() };
+    let system = format!(
+        "You are Soul, a desktop assistant. The user dropped the attached file on Soul and asks a question \
+about it. Answer from the file's content, concisely and accurately; say so when the file does not contain \
+the answer. Plain text, short paragraphs or simple lists, no markdown headings. {}",
+        reply_language_rule(language)
+    );
+    Ok(serde_json::json!({
+        "system_instruction": { "parts": [{ "text": system }] },
+        "contents": [{ "role": "user", "parts": [file_part, { "text": question }] }],
+        "generation_config": { "temperature": 0.3 }
+    }))
+}
+
 /// Strip wrappers a model sometimes adds around a text-action result (tags, a whole-text fence).
 pub fn clean_text_action_output(out: &str) -> String {
     let mut s = out.trim();
@@ -1830,6 +1873,18 @@ fn api_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_ask_body_inline_or_text() {
+        let img = build_file_ask_body("Zrzut.PNG", b"\x89PNG", "co to?", "pl").unwrap();
+        assert_eq!(img["contents"][0]["parts"][0]["inline_data"]["mime_type"], "image/png");
+        assert_eq!(img["contents"][0]["parts"][1]["text"], "co to?");
+        let txt = build_file_ask_body("notes.md", "zażółć".as_bytes(), "", "pl").unwrap();
+        assert_eq!(txt["contents"][0]["parts"][0]["text"], "<file name=\"notes.md\">\nzażółć\n</file>");
+        let big = "ą".repeat(MAX_FILE_TEXT); // 2 bytes per char: cut on a char boundary
+        assert!(build_file_ask_body("big.txt", big.as_bytes(), "x", "pl").is_ok());
+        assert!(build_file_ask_body("bin.dat", &[0xff, 0xfe, 0x00], "x", "pl").is_err());
+    }
 
     #[test]
     fn server_errors_show_the_api_message_not_json() {

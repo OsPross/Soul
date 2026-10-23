@@ -680,6 +680,8 @@ pub fn run() {
             agent::text_action::text_action_undo,
             agent::text_action::text_result_copy,
             agent::text_action::text_result_paste,
+            island::drop::island_file_active,
+            island::drop::island_ask_file,
             memory_list,
             memory_add,
             memory_update,
@@ -1417,6 +1419,26 @@ fn route_smart_transcript(
         let lang = i18n::ui_lang(settings);
         report_error(app, i18n::tr(lang, "Nie zrozumiałem — powtórz po polsku.", "I didn't catch that — please repeat in Polish.").into());
         schedule_hide(app, 4000);
+        if let Some(state) = app.try_state::<AppState>() {
+            *state.busy.lock() = false;
+        }
+        return;
+    }
+    // A dropped-file card on the Island: the talk key asks about that file.
+    if let Some(path) = island::drop::active_file() {
+        eprintln!("[soul][island] smart route=file_ask ms={}", released.elapsed().as_millis());
+        e2e::trace("route", serde_json::json!({ "route": "file_ask" }));
+        let _ = emit_overlay(app, "thinking", None);
+        match island::drop::ask_file(app, &path, &heard.text, platform.active_window()) {
+            Ok(()) => {
+                let _ = emit_overlay(app, "done", None);
+                schedule_hide(app, 700);
+            }
+            Err(e) => {
+                report_error(app, e);
+                schedule_hide(app, 8000);
+            }
+        }
         if let Some(state) = app.try_state::<AppState>() {
             *state.busy.lock() = false;
         }
