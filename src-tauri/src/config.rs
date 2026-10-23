@@ -131,6 +131,10 @@ pub struct Settings {
     /// Stream dictation/commands over the Live API (false = REST only).
     #[serde(default = "default_true")]
     pub use_live_api: bool,
+    /// Dictation / commands transcribed by local Parakeet (`speech`) when its models are installed.
+    /// Off = Parakeet is only the fallback when Gemini Live and REST both fail.
+    #[serde(default)]
+    pub prefer_offline_stt: bool,
     pub language: String,
     /// Preferred input device name, or empty for system default.
     pub microphone: String,
@@ -281,6 +285,7 @@ impl Default for Settings {
             commands_model: DEFAULT_COMMANDS_MODEL.to_string(),
             ask_model: DEFAULT_ASK_MODEL.to_string(),
             use_live_api: true,
+            prefer_offline_stt: false,
             language: DEFAULT_LANGUAGE.to_string(),
             microphone: DEFAULT_MICROPHONE.to_string(),
             retired_models: Vec::new(),

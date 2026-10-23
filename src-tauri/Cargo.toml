@@ -45,6 +45,11 @@ rustpotter = "3.0.2"
 # rustpotter's candle-core 0.2 needs half on rand_distr 0.4 (half >= 2.5 moved to 0.5). Direct
 # pin so `cargo update` can't break the build.
 half = "=2.4.1"
+# Offline speech (speech/): Parakeet TDT ASR + pyannote diarization. `static` links prebuilt libs
+# fetched by sherpa-onnx-sys at build time (no CMake / Clang).
+sherpa-onnx = { version = "1.13.8", default-features = false, features = ["static"] }
+# SHA-256 of downloaded speech models (already in the tree via rustls).
+ring = "0.17"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 # Screen capture (Windows). Linux uses x11rb directly (platform/x11_capture.rs): xcap always links

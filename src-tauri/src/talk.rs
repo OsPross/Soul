@@ -139,7 +139,9 @@ pub fn begin_capture(
         CaptureTarget::Dictation => &settings.dictation_model,
         CaptureTarget::Commands => &settings.commands_model,
     };
-    let setup = crate::live_enabled_for(&settings, model).then(|| match target {
+    // Local Parakeet preferred: record only, `transcribe_turn` decodes the WAV offline.
+    let offline = settings.prefer_offline_stt && crate::speech::is_ready();
+    let setup = (!offline && crate::live_enabled_for(&settings, model)).then(|| match target {
         CaptureTarget::Dictation => crate::ai::live::dictation_setup(&settings),
         CaptureTarget::Commands => crate::ai::live::commands_setup(&settings),
     });

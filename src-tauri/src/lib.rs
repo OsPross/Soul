@@ -13,6 +13,7 @@ mod memory;
 mod platform;
 mod price_watch;
 mod scenes;
+mod speech;
 mod talk;
 mod timers;
 mod updater;
@@ -720,6 +721,9 @@ pub fn run() {
             wake::wake_train_record,
             wake::wake_train_build,
             wake::wake_train_reset,
+            speech::speech_models_status,
+            speech::speech_models_download,
+            speech::speech_models_remove,
             timers::timers_list,
             timers::timer_cancel,
             updater::update_status,
@@ -752,6 +756,7 @@ pub fn run() {
                 eprintln!("[soul][memory] unavailable: {e}");
             }
             island::init(app.handle());
+            speech::init(app.handle());
             coding_agents::pipe::start(app.handle().clone());
             timers::start_worker(app.handle().clone());
             updater::init(app.handle());
@@ -1170,6 +1175,21 @@ pub(crate) fn transcribe_turn(
     wav: Result<Vec<u8>, String>,
     released: Instant,
 ) -> Result<Heard, String> {
+    let offline = |wav: &[u8]| -> Option<Heard> {
+        let t = Instant::now();
+        let samples = speech::wav_samples(wav)?;
+        let text = speech::transcribe(&samples)?.text;
+        eprintln!(
+            "[soul][dictation] parakeet ms={} chars={}",
+            t.elapsed().as_millis(),
+            text.chars().count()
+        );
+        (!text.trim().is_empty()).then_some(Heard { text, live: true })
+    };
+    if settings.prefer_offline_stt && speech::is_ready() && live_events.is_none() {
+        let wav = wav?;
+        return offline(&wav).ok_or_else(|| "Transcription was empty.".to_string());
+    }
     let rest_model = settings.effective_ask_model().to_string();
     let rest_fallback = resolve_fallback_model(settings, &ai::gemini::cached_models());
     let client = GeminiClient::new(&settings.api_key, &rest_model);
@@ -1205,18 +1225,30 @@ pub(crate) fn transcribe_turn(
             }
             let app_for_status = app.clone();
             let app_for_retire = app.clone();
-            let text = client.transcribe_and_clean_resilient(
-                &wav,
-                &settings.language,
-                Some(&rest_fallback),
-                move |st, message| {
-                    let _ = emit_overlay(&app_for_status, st, message);
-                },
-                move |retired| {
-                    retire_model_and_heal(&app_for_retire, retired);
-                },
-            )?;
-            Ok(Heard { text, live: false })
+            let rest = if settings.api_key.trim().is_empty() && speech::is_ready() {
+                Err("no API key".to_string())
+            } else {
+                client.transcribe_and_clean_resilient(
+                    &wav,
+                    &settings.language,
+                    Some(&rest_fallback),
+                    move |st, message| {
+                        let _ = emit_overlay(&app_for_status, st, message);
+                    },
+                    move |retired| {
+                        retire_model_and_heal(&app_for_retire, retired);
+                    },
+                )
+            };
+            match rest {
+                Ok(text) => Ok(Heard { text, live: false }),
+                // Offline / quota exhausted: local Parakeet keeps dictation and commands working.
+                Err(e) if speech::is_ready() => {
+                    eprintln!("[soul][dictation] REST failed ({e}) → offline Parakeet");
+                    offline(&wav).ok_or(e)
+                }
+                Err(e) => Err(e),
+            }
         }
     }
 }
